@@ -1,0 +1,473 @@
+from __future__ import annotations
+
+import unittest
+
+from lucx_post_configurator.models import Audit, Inbound, default_manifest
+from lucx_post_configurator.questionnaire import (
+    _select_numbered_domains,
+    _yes_no,
+    build_manifest_interactively,
+    configure_protocol_decoys_interactively,
+    configure_decoy_routing_mode,
+    decoy_reachability,
+    refresh_manifest_from_audit,
+)
+
+
+def _audit(protocol: str) -> Audit:
+    return Audit(
+        os_id="debian",
+        os_version="12",
+        supported_os=True,
+        db_path="/etc/x-ui/x-ui.db",
+        db_schema_supported=True,
+        settings={
+            "webDomain": "panel.example.com",
+            "webPort": "2083",
+            "webCertFile": "/cert/fullchain.pem",
+            "webKeyFile": "/cert/privkey.pem",
+            "subDomain": "sub.example.com",
+            "subPort": "2096",
+            "subPath": "/sub/",
+        },
+        inbounds=[
+            Inbound(
+                id=1,
+                protocol=protocol,
+                remark=f"ONLY {protocol}",
+                enable=True,
+                listen="",
+                port=443 if protocol == "vless" else 56712,
+                share_addr=f"{protocol}.example.com",
+                network="tcp" if protocol == "vless" else "udp",
+                security="reality" if protocol == "vless" else "",
+                suggested_public_port=443 if protocol == "vless" else 56712,
+                server_names=["www.microsoft.com"] if protocol == "vless" else [],
+            )
+        ],
+        ssh_ports=[49283],
+        public_addresses=["192.0.2.10"],
+    )
+
+
+class NumberedDomainSelectionTests(unittest.TestCase):
+    def test_selects_sni_by_number_and_offers_select_all(self) -> None:
+        output: list[str] = []
+
+        selected = _select_numbered_domains(
+            "SNI для маршрутизации",
+            ["one.example.com", "two.example.com", "three.example.com"],
+            input_fn=lambda _: "2,4",
+            output_fn=output.append,
+        )
+
+        self.assertEqual(selected, ["one.example.com", "three.example.com"])
+        self.assertIn("  1. Выбрать все (по умолчанию)", output)
+        self.assertIn("  2. one.example.com", output)
+        self.assertIn("  4. three.example.com", output)
+
+    def test_blank_or_one_selects_all_sni(self) -> None:
+        domains = ["one.example.com", "two.example.com"]
+        for answer in ("", "1"):
+            with self.subTest(answer=answer):
+                self.assertEqual(
+                    _select_numbered_domains(
+                        "SNI",
+                        domains,
+                        input_fn=lambda _prompt, value=answer: value,
+                        output_fn=lambda _: None,
+                    ),
+                    domains,
+                )
+
+
+class QuestionnaireTests(unittest.TestCase):
+    def test_extended_decoy_mode_is_built_from_current_audit_and_can_return_to_strict(self) -> None:
+        audit = _audit("vless")
+        audit.inbounds[0].security = "tls"
+        audit.inbounds[0].server_names = ["vless.example.com"]
+        manifest = default_manifest(audit)
+        manifest["protocols"] = [
+            {
+                "inbound_id": 1,
+                "protocol": "vless",
+                "remark": "ONLY vless",
+                "domain": "vless.example.com",
+                "internal_host": "127.0.0.1",
+                "internal_port": 443,
+                "public_port": 443,
+                "udp_public_port": 443,
+                "network": "tcp",
+                "exposure": "tcp_sni",
+                "security": "tls",
+                "sni_names": ["vless.example.com"],
+                "transport": "tcp",
+                "transport_path": "",
+                "transport_hosts": [],
+                "alpn": ["h2", "http/1.1"],
+                "port_bindings": [{"port": 443, "protocol": "TCP"}],
+            }
+        ]
+        manifest["decoys"]["enabled"] = True
+        manifest["decoys"]["sites"] = [
+            {
+                "domain": "vless.example.com",
+                "root": "/var/www/lucx-decoys/vless.example.com",
+            }
+        ]
+
+        extended, warnings = configure_decoy_routing_mode(manifest, audit, "extended")
+
+        self.assertEqual(extended["decoys"]["routing_mode"], "extended")
+        self.assertTrue(extended["decoys"]["extended_user_confirmed"])
+        self.assertTrue(extended["components"]["extended_tls_split"])
+        self.assertEqual(
+            extended["decoys"]["extended_routes"][0]["strategy"],
+            "binary_tls_split",
+        )
+        self.assertEqual(warnings, [])
+
+        strict, _ = configure_decoy_routing_mode(extended, audit, "strict")
+        self.assertEqual(strict["decoys"]["routing_mode"], "strict")
+        self.assertFalse(strict["decoys"]["extended_user_confirmed"])
+        self.assertFalse(strict["components"]["extended_tls_split"])
+        self.assertFalse(strict["components"]["naive_frontend"])
+        self.assertEqual(strict["decoys"]["extended_routes"], [])
+
+    def test_extended_mode_refreshes_trusttunnel_matcher_from_current_audit(self) -> None:
+        audit = _audit("trusttunnel")
+        audit.inbounds[0].network = "tcp"
+        audit.inbounds[0].port = 9443
+        audit.inbounds[0].suggested_public_port = 443
+        audit.inbounds[0].clienthello_match_fingerprint = "sha256:0123456789ab"
+        manifest = default_manifest(audit)
+        manifest["protocols"] = [
+            {
+                "inbound_id": 1,
+                "protocol": "trusttunnel",
+                "remark": "stale",
+                "domain": "trusttunnel.example.com",
+                "internal_host": "127.0.0.1",
+                "internal_port": 9443,
+                "public_port": 443,
+                "udp_public_port": 443,
+                "network": "tcp",
+                "exposure": "tcp_sni",
+                "security": "",
+                "sni_names": [],
+                "transport": "tcp",
+                "transport_path": "",
+                "transport_hosts": [],
+                "alpn": [],
+                "port_bindings": [{"port": 9443, "protocol": "TCP"}],
+                "clienthello_match_fingerprint": "",
+            }
+        ]
+        manifest["decoys"]["enabled"] = True
+
+        extended, _ = configure_decoy_routing_mode(manifest, audit, "extended")
+
+        self.assertEqual(
+            extended["decoys"]["extended_routes"][0]["strategy"],
+            "trusttunnel_clienthello_split",
+        )
+        self.assertEqual(
+            extended["protocols"][0]["clienthello_match_fingerprint"],
+            "sha256:0123456789ab",
+        )
+
+    def test_yes_no_question_uses_numeric_options_only(self) -> None:
+        output: list[str] = []
+        prompts: list[str] = []
+        answers = iter(["да", "1"])
+
+        self.assertTrue(
+            _yes_no(
+                "Создать заглушки?",
+                False,
+                input_fn=lambda prompt: prompts.append(prompt) or next(answers),
+                output_fn=output.append,
+            )
+        )
+        rendered = "\n".join(output + prompts)
+        self.assertIn("1. Да", rendered)
+        self.assertIn("2. Нет", rendered)
+        self.assertIn("Введите 1 или 2", rendered)
+        self.assertNotIn("Д/н", rendered)
+
+    def test_post_update_refresh_reclassifies_native_naive_capability(self) -> None:
+        audit = Audit(
+            os_id="debian",
+            os_version="12",
+            supported_os=True,
+            db_path="/etc/x-ui/x-ui.db",
+            db_schema_supported=True,
+            settings={"webPort": "2083", "subPort": "2096"},
+            inbounds=[
+                Inbound(
+                    id=7,
+                    protocol="naive",
+                    remark="Naive",
+                    enable=True,
+                    listen="127.0.0.1",
+                    port=47863,
+                    share_addr="naive.example.com",
+                    network="tcp",
+                    security="tls",
+                    suggested_public_port=443,
+                    server_names=["naive.example.com"],
+                )
+            ],
+            naive_caddyfile={
+                "found": True,
+                "binary_path": "/usr/local/x-ui/bin/caddy-naive-linux-amd64",
+                "files": [
+                    {
+                        "path": "/usr/local/x-ui/bin/tunnel/naive-7.caddyfile",
+                        "sha256": "b" * 64,
+                        "capabilities": {
+                            "forward_proxy": True,
+                            "file_server": False,
+                            "native_decoy": False,
+                        },
+                    }
+                ],
+            },
+        )
+        manifest = default_manifest(audit)
+        manifest["protocols"] = [
+            {
+                "inbound_id": 7,
+                "protocol": "naive",
+                "remark": "Naive",
+                "domain": "naive.example.com",
+                "internal_host": "127.0.0.1",
+                "internal_port": 47863,
+                "public_port": 443,
+                "udp_public_port": 443,
+                "network": "tcp",
+                "exposure": "tcp_sni",
+                "security": "tls",
+                "transport": "tcp",
+                "transport_path": "",
+                "transport_hosts": [],
+                "alpn": [],
+                "sni_names": ["naive.example.com"],
+                "port_bindings": [],
+            }
+        ]
+        manifest["decoys"].update(
+            {
+                "enabled": True,
+                "routing_mode": "extended",
+                "extended_user_confirmed": True,
+                "sites": [
+                    {
+                        "domain": "naive.example.com",
+                        "root": "/var/www/lucx-decoys/naive.example.com",
+                    }
+                ],
+                "extended_routes": [
+                    {
+                        "inbound_id": 7,
+                        "strategy": "naive_native",
+                        "status": "ready",
+                        "source_caddyfile_sha256": "a" * 64,
+                    }
+                ],
+            }
+        )
+        manifest["components"].update(
+            {"haproxy": True, "nginx": True, "extended_tls_split": True}
+        )
+
+        refreshed, warnings = refresh_manifest_from_audit(manifest, audit)
+
+        route = refreshed["decoys"]["extended_routes"][0]
+        self.assertEqual(route["strategy"], "naive_managed")
+        self.assertEqual(route["source_caddyfile_sha256"], "b" * 64)
+        self.assertTrue(refreshed["components"]["naive_frontend"])
+        self.assertTrue(any("Naive" in warning for warning in warnings))
+
+    def test_direct_inbound_public_port_is_rebased_to_listener_after_refresh(self) -> None:
+        """A stale Host port (20100) must not break a qwdtt/mieru direct repair."""
+
+        audit = _audit("qwdtt")
+        inbound = audit.inbounds[0]
+        inbound.network = "both"
+        inbound.port = 56000
+        inbound.suggested_public_port = 20100  # stale hosts row
+        inbound.port_bindings = [
+            {"port": 56000, "protocol": "TCP_UDP"},
+            {"port": 56001, "protocol": "UDP"},
+        ]
+        manifest = default_manifest(audit)
+        manifest["protocols"] = [
+            {
+                "inbound_id": inbound.id,
+                "protocol": "qwdtt",
+                "remark": inbound.remark,
+                "domain": "qwdtt.example.com",
+                "internal_host": "127.0.0.1",
+                "internal_port": 56000,
+                "public_port": 56000,
+                "udp_public_port": 56000,
+                "network": "both",
+                "exposure": "tcp_udp_direct",
+                "security": "",
+                "sni_names": [],
+                "port_bindings": inbound.port_bindings,
+                "sync_public_endpoint": True,
+            }
+        ]
+        manifest["lucx"]["settings_management"]["user_confirmed"] = True
+
+        refreshed, _warnings = refresh_manifest_from_audit(manifest, audit)
+
+        protocol = refreshed["protocols"][0]
+        self.assertEqual(protocol["public_port"], 56000)
+        self.assertEqual(protocol["udp_public_port"], 56000)
+        self.assertEqual(protocol["exposure"], "tcp_udp_direct")
+    def test_decoys_are_created_automatically_for_every_unique_protocol_domain(self) -> None:
+        manifest = default_manifest()
+        manifest["protocols"] = [
+            {
+                "inbound_id": 2,
+                "protocol": "vless",
+                "domain": "test2.example.test",
+                "exposure": "tcp_sni",
+                "public_port": 443,
+                "sni_names": ["www.microsoft.com"],
+            },
+            {
+                "inbound_id": 3,
+                "protocol": "trojan",
+                "domain": "test3.example.test",
+                "exposure": "tcp_sni",
+                "public_port": 443,
+                "sni_names": ["test3.example.test"],
+            },
+            {
+                "inbound_id": 6,
+                "protocol": "awg",
+                "domain": "test5.example.test",
+                "exposure": "udp_direct",
+                "public_port": 8443,
+                "sni_names": [],
+            },
+            {
+                "inbound_id": 7,
+                "protocol": "naive",
+                "domain": "test6.example.test",
+                "exposure": "tcp_sni",
+                "public_port": 443,
+                "sni_names": ["test6.example.test"],
+            },
+        ]
+        answers = iter(["", "", ""])
+        changed, warnings = configure_protocol_decoys_interactively(
+            manifest,
+            input_fn=lambda _prompt: next(answers),
+            output_fn=lambda _line: None,
+        )
+        self.assertEqual(
+            [site["domain"] for site in changed["decoys"]["sites"]],
+            [
+                "test2.example.test",
+                "test3.example.test",
+                "test5.example.test",
+                "test6.example.test",
+            ],
+        )
+        self.assertTrue(changed["components"]["nginx"])
+        self.assertEqual(changed["network"]["unknown_sni_action"], "reject")
+        self.assertEqual(
+            decoy_reachability(changed),
+            [
+                {"domain": "test2.example.test", "delivery": "direct_nginx"},
+                {
+                    "domain": "test3.example.test",
+                    "delivery": "existing_protocol_fallback",
+                },
+                {"domain": "test5.example.test", "delivery": "direct_nginx"},
+                {"domain": "test6.example.test", "delivery": "naive_caddy"},
+            ],
+        )
+        self.assertEqual(len(warnings), 2)
+
+    def _run_defaults(self, protocol: str) -> tuple[dict, list[str]]:
+        prompts: list[str] = []
+
+        def answer(prompt: str) -> str:
+            prompts.append(prompt)
+            return ""
+
+        manifest = build_manifest_interactively(
+            _audit(protocol), input_fn=answer, output_fn=prompts.append
+        )
+        return manifest, prompts
+
+    def test_awg_candidate_is_asked_but_default_answer_does_not_enable_sidecar(self) -> None:
+        manifest, prompts = self._run_defaults("awg")
+        self.assertTrue(any("subscription-sidecar" in prompt for prompt in prompts))
+        self.assertFalse(manifest["components"]["sidecar"])
+        self.assertFalse(manifest["sidecar"]["user_confirmed"])
+
+    def test_amneziawg_candidate_is_also_asked_without_auto_enable(self) -> None:
+        manifest, prompts = self._run_defaults("amneziawg")
+        self.assertTrue(any("subscription-sidecar" in prompt for prompt in prompts))
+        self.assertFalse(manifest["components"]["sidecar"])
+
+    def test_single_vless_topology_still_asks_but_does_not_enable_sidecar(self) -> None:
+        manifest, prompts = self._run_defaults("vless")
+        self.assertEqual([item["protocol"] for item in manifest["protocols"]], ["vless"])
+        self.assertEqual(manifest["protocols"][0]["public_port"], 443)
+        self.assertEqual(manifest["protocols"][0]["exposure"], "tcp_sni")
+        self.assertEqual(manifest["protocols"][0]["sni_names"], ["www.microsoft.com"])
+        self.assertEqual(manifest["network"]["non_tls_backend_inbound_id"], 1)
+        self.assertTrue(any("subscription-sidecar" in prompt for prompt in prompts))
+        self.assertFalse(manifest["components"]["sidecar"])
+
+    def test_cloudflare_origin_restriction_is_explicitly_recorded(self) -> None:
+        manifest, prompts = self._run_defaults("vless")
+        self.assertTrue(any("Cloudflare" in prompt for prompt in prompts))
+        self.assertTrue(manifest["cloudflare"]["enabled"])
+        self.assertTrue(manifest["cloudflare"]["user_confirmed"])
+
+    def test_transport_metadata_is_carried_into_plan_and_post_update_refresh(self) -> None:
+        audit = _audit("vless")
+        inbound = audit.inbounds[0]
+        inbound.transport = "httpupgrade"
+        inbound.transport_path = "/route"
+        inbound.transport_hosts = ["vless.example.com"]
+        inbound.alpn = ["h2", "http/1.1"]
+        inbound.udp_over_tcp = True
+
+        manifest = build_manifest_interactively(
+            audit, input_fn=lambda _: "", output_fn=lambda _: None
+        )
+        planned = manifest["protocols"][0]
+        self.assertEqual(planned["transport"], "httpupgrade")
+        self.assertEqual(planned["transport_path"], "/route")
+        self.assertEqual(planned["transport_hosts"], ["vless.example.com"])
+        self.assertEqual(planned["alpn"], ["h2", "http/1.1"])
+        self.assertTrue(planned["udp_over_tcp"])
+
+        inbound.transport = "xhttp"
+        inbound.transport_path = "/new-route"
+        inbound.transport_hosts = ["new-vless.example.com"]
+        inbound.transport_mode = "stream-up"
+        inbound.alpn = ["h2"]
+        inbound.udp_over_tcp = False
+        refreshed, _warnings = refresh_manifest_from_audit(manifest, audit)
+        planned = refreshed["protocols"][0]
+        self.assertEqual(planned["transport"], "xhttp")
+        self.assertEqual(planned["transport_path"], "/new-route")
+        self.assertEqual(planned["transport_hosts"], ["new-vless.example.com"])
+        self.assertEqual(planned["transport_mode"], "stream-up")
+        self.assertEqual(planned["alpn"], ["h2"])
+        self.assertFalse(planned["udp_over_tcp"])
+
+
+if __name__ == "__main__":
+    unittest.main()
