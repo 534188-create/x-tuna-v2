@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "x-tuna"
-version = "2.0.1"
+version = "2.0.2"
 description = "Безопасный транзакционный постконфигуратор LucX"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }

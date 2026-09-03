@@ -291,7 +291,10 @@ def synchronize_lucx_publication(
             inbound_id = int(publication["inbound_id"])
             domain = str(publication["domain"]).strip().lower()
             public_port = int(publication["public_port"])
-            new_value = f"{domain}:{public_port}"
+            # LucX canonicalizes the default HTTPS port away from share_addr.
+            # Keep the Host row's explicit port below; it is authoritative for
+            # subscription links while the inbound field remains stable.
+            new_value = domain if public_port == 443 else f"{domain}:{public_port}"
             row = connection.execute(
                 "SELECT protocol, share_addr FROM inbounds WHERE id = ?", (inbound_id,)
             ).fetchone()

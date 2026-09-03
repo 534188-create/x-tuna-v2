@@ -7,8 +7,8 @@
 
 ```text
 https://gh-proxy.com/en/https://raw.githubusercontent.com/534188-create/x-tuna-v2/main/install.sh
-https://gh-proxy.com/en/https://github.com/534188-create/x-tuna-v2/releases/download/v2.0.1/lucx-post-configure.sh
-https://gh-proxy.com/en/https://github.com/534188-create/x-tuna-v2/releases/download/v2.0.1/SHA256SUMS
+https://gh-proxy.com/en/https://github.com/534188-create/x-tuna-v2/releases/download/v2.0.2/lucx-post-configure.sh
+https://gh-proxy.com/en/https://github.com/534188-create/x-tuna-v2/releases/download/v2.0.2/SHA256SUMS
 ```
 
 Proxy не является проверкой целостности. После загрузки installer всегда

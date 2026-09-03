@@ -158,7 +158,7 @@ class TransactionTests(unittest.TestCase):
                 ports = dict(connection.execute("SELECT id, port FROM inbounds WHERE id IN (1,2)"))
             finally:
                 connection.close()
-            self.assertEqual(values, {1: "one.new.example:443", 2: "two.new.example:443"})
+            self.assertEqual(values, {1: "one.new.example", 2: "two.new.example"})
             self.assertEqual(hosts, [(11, "one.new.example", 443), (12, "two.new.example", 443), (13, "disabled.example.com", 8443)])
             self.assertEqual(ports, {1: 54703, 2: 443})
             self.assertEqual(
@@ -378,7 +378,7 @@ class TransactionTests(unittest.TestCase):
             try:
                 self.assertEqual(
                     connection.execute("SELECT share_addr FROM inbounds WHERE id=1").fetchone()[0],
-                    "naive.example.com:443",
+                    "naive.example.com",
                 )
             finally:
                 connection.close()

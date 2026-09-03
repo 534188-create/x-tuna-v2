@@ -6,8 +6,8 @@
 ## Вариант 1: быстрый старт через GitHub
 
 ```bash
-curl -fsSL https://github.com/534188-create/x-tuna-v2/releases/download/v2.0.1/SHA256SUMS -o /tmp/x-tuna-SHA256SUMS
-curl -fsSL https://github.com/534188-create/x-tuna-v2/releases/download/v2.0.1/lucx-post-configure.sh -o /tmp/x-tuna.sh
+curl -fsSL https://github.com/534188-create/x-tuna-v2/releases/download/v2.0.2/SHA256SUMS -o /tmp/x-tuna-SHA256SUMS
+curl -fsSL https://github.com/534188-create/x-tuna-v2/releases/download/v2.0.2/lucx-post-configure.sh -o /tmp/x-tuna.sh
 grep 'lucx-post-configure.sh' /tmp/x-tuna-SHA256SUMS | sed 's#  lucx-post-configure.sh#  /tmp/x-tuna.sh#' | sha256sum -c -
 chmod 0700 /tmp/x-tuna.sh
 sudo /tmp/x-tuna.sh --install-tui
@@ -20,8 +20,8 @@ sudo x-tuna
 checksum, и installer:
 
 ```bash
-curl -fsSL 'https://gh-proxy.com/en/https://github.com/534188-create/x-tuna-v2/releases/download/v2.0.1/SHA256SUMS' -o /tmp/x-tuna-SHA256SUMS
-curl -fsSL 'https://gh-proxy.com/en/https://github.com/534188-create/x-tuna-v2/releases/download/v2.0.1/lucx-post-configure.sh' -o /tmp/x-tuna.sh
+curl -fsSL 'https://gh-proxy.com/en/https://github.com/534188-create/x-tuna-v2/releases/download/v2.0.2/SHA256SUMS' -o /tmp/x-tuna-SHA256SUMS
+curl -fsSL 'https://gh-proxy.com/en/https://github.com/534188-create/x-tuna-v2/releases/download/v2.0.2/lucx-post-configure.sh' -o /tmp/x-tuna.sh
 grep 'lucx-post-configure.sh' /tmp/x-tuna-SHA256SUMS | sed 's#  lucx-post-configure.sh#  /tmp/x-tuna.sh#' | sha256sum -c -
 chmod 0700 /tmp/x-tuna.sh
 sudo /tmp/x-tuna.sh --install-tui
@@ -32,8 +32,8 @@ sudo x-tuna
 
 ```bash
 curl -fsSL 'https://gh-proxy.com/en/https://raw.githubusercontent.com/534188-create/x-tuna-v2/main/install.sh' -o /tmp/x-tuna-install.sh
-X_TUNA_ARTIFACT_URL='https://gh-proxy.com/en/https://github.com/534188-create/x-tuna-v2/releases/download/v2.0.1/lucx-post-configure.sh' \
-X_TUNA_SUMS_URL='https://gh-proxy.com/en/https://github.com/534188-create/x-tuna-v2/releases/download/v2.0.1/SHA256SUMS' \
+X_TUNA_ARTIFACT_URL='https://gh-proxy.com/en/https://github.com/534188-create/x-tuna-v2/releases/download/v2.0.2/lucx-post-configure.sh' \
+X_TUNA_SUMS_URL='https://gh-proxy.com/en/https://github.com/534188-create/x-tuna-v2/releases/download/v2.0.2/SHA256SUMS' \
 sudo -E sh /tmp/x-tuna-install.sh --install-tui
 sudo x-tuna
 ```

@@ -12,7 +12,7 @@ command -v curl >/dev/null 2>&1 || {
     printf '%s\n' 'curl is required for the online bootstrap.' >&2
     exit 2
 }
-version=${X_TUNA_VERSION:-v2.0.1}
+version=${X_TUNA_VERSION:-v2.0.2}
 url=${X_TUNA_ARTIFACT_URL:-https://github.com/534188-create/x-tuna-v2/releases/download/$version/lucx-post-configure.sh}
 sum_url=${X_TUNA_SUMS_URL:-https://github.com/534188-create/x-tuna-v2/releases/download/$version/SHA256SUMS}
 tmp=$(mktemp)

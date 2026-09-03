@@ -131,6 +131,49 @@ class IntegrityTests(unittest.TestCase):
         self.assertIn("inbound #1 remark changed", errors)
         self.assertIn("Naive Caddyfile content sha256 changed", errors)
 
+    def test_standard_https_share_address_is_canonicalized(self) -> None:
+        before = self.capture()["protected_lucx"]
+        connection = sqlite3.connect(self.db)
+        try:
+            connection.execute(
+                "UPDATE inbounds SET share_addr = ? WHERE id = 5",
+                ("new.example.com",),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        after = self.capture()["protected_lucx"]
+        changes = [{
+            "kind": "inbound_share_addr",
+            "inbound_id": 5,
+            "old_value": "userapi.example.com",
+            "new_value": "new.example.com:443",
+        }]
+        self.assertEqual(compare_lucx(before, after, changes), [])
+
+    def test_trusttunnel_http3_to_http2_normalization_is_ignored(self) -> None:
+        connection = sqlite3.connect(self.db)
+        try:
+            connection.execute(
+                "UPDATE inbounds SET protocol = 'trusttunnel', settings = ? WHERE id = 1",
+                (json.dumps({"upstreamProtocol": "http3", "clients": []}),),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        before = self.capture()["protected_lucx"]
+        connection = sqlite3.connect(self.db)
+        try:
+            connection.execute(
+                "UPDATE inbounds SET settings = ? WHERE id = 1",
+                (json.dumps({"upstreamProtocol": "http2", "clients": []}),),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        after = self.capture()["protected_lucx"]
+        self.assertEqual(compare_lucx(before, after, []), [])
+
 
 if __name__ == "__main__":
     unittest.main()

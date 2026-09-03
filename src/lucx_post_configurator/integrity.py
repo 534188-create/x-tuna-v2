@@ -38,6 +38,28 @@ def _digest(value: Any) -> str:
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
+def _normalize_inbound_value(protocol: str, column: str, value: Any) -> Any:
+    """Normalize values LucX rewrites without changing their meaning."""
+    if column == "share_addr" and isinstance(value, str):
+        if value.lower().endswith(":443"):
+            return value[:-4]
+    if column == "settings" and protocol == "trusttunnel" and isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            return value
+        if isinstance(parsed, dict) and "upstreamProtocol" in parsed:
+            parsed["upstreamProtocol"] = "http2"
+            return json.dumps(parsed, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return value
+
+
+def _normalize_public_address(value: Any) -> Any:
+    if isinstance(value, str) and value.lower().endswith(":443"):
+        return value[:-4]
+    return value
+
+
 def _table_columns(connection: sqlite3.Connection, table: str) -> list[str]:
     return [str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})")]
 
@@ -80,8 +102,11 @@ def _snapshot_lucx(fs: TargetFS, db_path: str) -> dict[str, Any]:
                 quoted = ", ".join('"' + name.replace('"', '""') + '"' for name in selected)
                 for row in connection.execute(f"SELECT {quoted} FROM inbounds ORDER BY id"):
                     inbound_id = str(int(row["id"]))
+                    protocol = str(row["protocol"] or "").lower()
                     inbounds[inbound_id] = {
-                        name: _digest(row[name]) for name in selected if name != "id"
+                        name: _digest(_normalize_inbound_value(protocol, name, row[name]))
+                        for name in selected
+                        if name != "id"
                     }
 
         if "hosts" in tables:
@@ -214,7 +239,7 @@ def _allowed_paths(changes: list[dict[str, Any]]) -> dict[tuple[str, ...], tuple
         elif kind == "inbound_share_addr":
             result[("inbounds", str(int(change["inbound_id"])), "share_addr")] = (
                 _digest(change.get("old_value")),
-                _digest(change.get("new_value")),
+                _digest(_normalize_public_address(change.get("new_value"))),
             )
         elif kind == "inbound_host_endpoint":
             host_id = str(int(change["host_id"]))

@@ -95,8 +95,8 @@ systemd worker выполняет последовательность «обн�
 ### 1. Быстрый старт через GitHub
 
 ```bash
-curl -fsSL https://github.com/534188-create/x-tuna-v2/releases/download/v2.0.1/SHA256SUMS -o /tmp/x-tuna-SHA256SUMS
-curl -fsSL https://github.com/534188-create/x-tuna-v2/releases/download/v2.0.1/lucx-post-configure.sh -o /tmp/x-tuna.sh
+curl -fsSL https://github.com/534188-create/x-tuna-v2/releases/download/v2.0.2/SHA256SUMS -o /tmp/x-tuna-SHA256SUMS
+curl -fsSL https://github.com/534188-create/x-tuna-v2/releases/download/v2.0.2/lucx-post-configure.sh -o /tmp/x-tuna.sh
 grep 'lucx-post-configure.sh' /tmp/x-tuna-SHA256SUMS | sed 's#  lucx-post-configure.sh#  /tmp/x-tuna.sh#' | sha256sum -c -
 chmod 0700 /tmp/x-tuna.sh
 sudo /tmp/x-tuna.sh --install-tui
@@ -109,8 +109,8 @@ sudo x-tuna
 и файла `SHA256SUMS`:
 
 ```bash
-curl -fsSL 'https://gh-proxy.com/en/https://github.com/534188-create/x-tuna-v2/releases/download/v2.0.1/SHA256SUMS' -o /tmp/x-tuna-SHA256SUMS
-curl -fsSL 'https://gh-proxy.com/en/https://github.com/534188-create/x-tuna-v2/releases/download/v2.0.1/lucx-post-configure.sh' -o /tmp/x-tuna.sh
+curl -fsSL 'https://gh-proxy.com/en/https://github.com/534188-create/x-tuna-v2/releases/download/v2.0.2/SHA256SUMS' -o /tmp/x-tuna-SHA256SUMS
+curl -fsSL 'https://gh-proxy.com/en/https://github.com/534188-create/x-tuna-v2/releases/download/v2.0.2/lucx-post-configure.sh' -o /tmp/x-tuna.sh
 grep 'lucx-post-configure.sh' /tmp/x-tuna-SHA256SUMS | sed 's#  lucx-post-configure.sh#  /tmp/x-tuna.sh#' | sha256sum -c -
 chmod 0700 /tmp/x-tuna.sh
 sudo /tmp/x-tuna.sh --install-tui
