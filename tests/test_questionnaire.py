@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from lucx_post_configurator.models import Audit, Inbound, default_manifest
+from lucx_post_configurator.models import ConfigurationError
 from lucx_post_configurator.questionnaire import (
     default_public_port_for_inbound,
     _select_numbered_domains,
@@ -49,6 +50,38 @@ def _audit(protocol: str) -> Audit:
         ssh_ports=[49283],
         public_addresses=["192.0.2.10"],
     )
+
+
+class RefreshInboundSetPolicyTests(unittest.TestCase):
+    """Post-update refresh must stay strict about the inbound set."""
+
+    def test_added_or_removed_inbounds_stop_the_refresh(self) -> None:
+        audit = _audit("vless")
+        manifest = {
+            "lucx": {
+                "panel": {"internal_host": "127.0.0.1", "internal_port": 2083},
+                "subscription": {"internal_host": "127.0.0.1", "internal_port": 2096},
+            },
+            "protocols": [
+                {
+                    "inbound_id": 1,
+                    "protocol": "vless",
+                    "domain": "vless.example.com",
+                    "internal_port": 443,
+                    "public_port": 443,
+                },
+                {
+                    "inbound_id": 2,
+                    "protocol": "trojan",
+                    "domain": "trojan.example.com",
+                    "internal_port": 443,
+                    "public_port": 443,
+                },
+            ],
+        }
+
+        with self.assertRaises(ConfigurationError):
+            refresh_manifest_from_audit(manifest, audit)
 
 
 class NumberedDomainSelectionTests(unittest.TestCase):

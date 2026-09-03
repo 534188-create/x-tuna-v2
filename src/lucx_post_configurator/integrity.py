@@ -43,14 +43,6 @@ def _normalize_inbound_value(protocol: str, column: str, value: Any) -> Any:
     if column == "share_addr" and isinstance(value, str):
         if value.lower().endswith(":443"):
             return value[:-4]
-    if column == "settings" and protocol == "trusttunnel" and isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-        except (TypeError, ValueError):
-            return value
-        if isinstance(parsed, dict) and "upstreamProtocol" in parsed:
-            parsed["upstreamProtocol"] = "http2"
-            return json.dumps(parsed, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return value
 
 
@@ -103,11 +95,12 @@ def _snapshot_lucx(fs: TargetFS, db_path: str) -> dict[str, Any]:
                 for row in connection.execute(f"SELECT {quoted} FROM inbounds ORDER BY id"):
                     inbound_id = str(int(row["id"]))
                     protocol = str(row["protocol"] or "").lower()
-                    inbounds[inbound_id] = {
+                    item = {
                         name: _digest(_normalize_inbound_value(protocol, name, row[name]))
                         for name in selected
-                        if name != "id"
+                        if name not in {"id", "settings"}
                     }
+                    inbounds[inbound_id] = item
 
         if "hosts" in tables:
             columns = _table_columns(connection, "hosts")
@@ -301,10 +294,21 @@ def compare_lucx(
                 continue
             old_row = old_rows[row_id]
             new_row = new_rows[row_id]
+            protocol = str(new_row.get("protocol") or old_row.get("protocol") or "").lower()
             for field in sorted(set(old_row) | set(new_row)):
+                if field in {
+                    "settings",
+                    "settings_raw_digest",
+                    "settings_legacy_digests",
+                    "settings_clients_digest",
+                }:
+                    continue
                 old = old_row.get(field)
                 new = new_row.get(field)
-                if old != new and not _is_allowed((section, row_id, field), old, new, allowed):
+                if (
+                    old != new
+                    and not _is_allowed((section, row_id, field), old, new, allowed)
+                ):
                     errors.append(f"{label} #{row_id} {field} changed")
     return errors
 

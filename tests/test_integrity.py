@@ -174,6 +174,96 @@ class IntegrityTests(unittest.TestCase):
         after = self.capture()["protected_lucx"]
         self.assertEqual(compare_lucx(before, after, []), [])
 
+    def test_awg_legacy_false_defaults_are_ignored_for_any_awg_version(self) -> None:
+        for version in ("2", "3.0", "3.1", "9.7"):
+            with self.subTest(version=version):
+                connection = sqlite3.connect(self.db)
+                try:
+                    connection.execute(
+                        "UPDATE inbounds SET protocol = 'awg', settings = ? WHERE id = 1",
+                        (json.dumps({"awgVersion": version, "randomTrailers": False, "disableCookies": False}),),
+                    )
+                    connection.commit()
+                finally:
+                    connection.close()
+                before = self.capture()["protected_lucx"]
+                connection = sqlite3.connect(self.db)
+                try:
+                    connection.execute(
+                        "UPDATE inbounds SET settings = ? WHERE id = 1",
+                        (json.dumps({"awgVersion": version}),),
+                    )
+                    connection.commit()
+                finally:
+                    connection.close()
+                after = self.capture()["protected_lucx"]
+                self.assertEqual(compare_lucx(before, after, []), [])
+
+    def test_protocol_settings_changes_are_allowed(self) -> None:
+        before = self.capture()["protected_lucx"]
+        connection = sqlite3.connect(self.db)
+        try:
+            connection.execute(
+                "UPDATE inbounds SET settings = ? WHERE id = 5",
+                (json.dumps({"clients": [], "network": "xhttp", "path": "/new-path"}),),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        self.assertEqual(compare_lucx(before, self.capture()["protected_lucx"], []), [])
+
+    def test_client_identity_changes_are_allowed(self) -> None:
+        before = self.capture()["protected_lucx"]
+        connection = sqlite3.connect(self.db)
+        try:
+            connection.execute(
+                "UPDATE inbounds SET settings = ? WHERE id = 5",
+                (json.dumps({"clients": [{"id": "changed-client"}], "network": "tcp"}),),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        self.assertEqual(compare_lucx(before, self.capture()["protected_lucx"], []), [])
+
+    def test_client_removal_between_updates_is_allowed(self) -> None:
+        before = self.capture()["protected_lucx"]
+        connection = sqlite3.connect(self.db)
+        try:
+            connection.execute("UPDATE inbounds SET settings = '{}' WHERE id = 5")
+            connection.commit()
+        finally:
+            connection.close()
+
+        self.assertEqual(compare_lucx(before, self.capture()["protected_lucx"], []), [])
+
+    def test_structural_inbound_changes_remain_blocked(self) -> None:
+        before = self.capture()["protected_lucx"]
+        connection = sqlite3.connect(self.db)
+        try:
+            connection.execute("UPDATE inbounds SET port = 12345 WHERE id = 5")
+            connection.commit()
+        finally:
+            connection.close()
+        self.assertIn(
+            "inbound #5 port changed",
+            compare_lucx(before, self.capture()["protected_lucx"], []),
+        )
+
+    def test_inbound_removal_remains_blocked(self) -> None:
+        before = self.capture()["protected_lucx"]
+        connection = sqlite3.connect(self.db)
+        try:
+            connection.execute("DELETE FROM inbounds WHERE id = 5")
+            connection.commit()
+        finally:
+            connection.close()
+
+        self.assertIn(
+            "inbound #5 was removed",
+            compare_lucx(before, self.capture()["protected_lucx"], []),
+        )
 
 if __name__ == "__main__":
     unittest.main()

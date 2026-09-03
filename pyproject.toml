@@ -1,11 +1,11 @@
-[build-system]
+﻿[build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "x-tuna"
-version = "2.0.2"
-description = "Безопасный транзакционный постконфигуратор LucX"
+version = "2.0.3"
+description = "Р‘РµР·РѕРїР°СЃРЅС‹Р№ С‚СЂР°РЅР·Р°РєС†РёРѕРЅРЅС‹Р№ РїРѕСЃС‚РєРѕРЅС„РёРіСѓСЂР°С‚РѕСЂ LucX"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [{ name = "tuna" }]

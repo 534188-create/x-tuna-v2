@@ -523,6 +523,31 @@ class ManagementFeatureTests(unittest.TestCase):
             ],
         )
 
+    @unittest.skipUnless(__import__("importlib.util").util.find_spec("fcntl"), "fcntl is unavailable on Windows")
+    def test_lock_error_identifies_active_owner_when_metadata_is_available(self) -> None:
+        class LiveTestFS(TargetFS):
+            @property
+            def is_live(self) -> bool:
+                return True
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            engine = Engine(root, runner=Runner(dry_run=True))
+            engine.fs = LiveTestFS(root)
+            lock = engine.fs.path("/run/lock/lucx-post-configurator.lock")
+            lock.parent.mkdir(parents=True, exist_ok=True)
+            metadata = engine.fs.path("/run/lock/lucx-post-configurator.lock.json")
+            metadata.write_text(
+                json.dumps({"pid": 1, "operation": "repair"}), encoding="utf-8"
+            )
+            import fcntl
+            with lock.open("a+") as handle:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                with self.assertRaisesRegex(ApplyError, "другая операция"):
+                    with engine._exclusive_lock():
+                        pass
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
     def test_detached_worker_runs_official_updater_before_transactional_repair(self) -> None:
         self.assertTrue(
             hasattr(updates_module, "run_update_worker"),

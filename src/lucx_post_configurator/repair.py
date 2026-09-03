@@ -91,6 +91,10 @@ def repair_check(engine: Engine) -> dict[str, Any]:
     validation = engine.validate_installed(include_live=False)
     changes = _dynamic_changes(saved, refreshed)
     expected_integrity = saved.get("integrity") or {}
+    # The last successful apply records its narrowly approved LucX metadata
+    # writes. Reuse those exact old/new values during drift checking; otherwise
+    # repair-check would report our own publication sync as an unexplained edit.
+    allowed_integrity_changes = list(state.get("lucx_publication_changes") or [])
     current_integrity = capture_integrity(
         engine.fs,
         saved["lucx"]["db_path"],
@@ -100,7 +104,7 @@ def repair_check(engine: Engine) -> dict[str, Any]:
         compare_integrity(
             expected_integrity,
             current_integrity,
-            [],
+            allowed_integrity_changes,
             naive_content_volatile=bool(
                 (saved.get("lucx", {}).get("settings_management") or {}).get(
                     "sync_naive_share_addr"

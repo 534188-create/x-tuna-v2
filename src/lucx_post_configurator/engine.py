@@ -286,16 +286,44 @@ class Engine:
         import fcntl
 
         lock_path = self.fs.path("/run/lock/lucx-post-configurator.lock")
+        metadata_path = self.fs.path("/run/lock/lucx-post-configurator.lock.json")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with lock_path.open("a+", encoding="ascii") as handle:
             try:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as exc:
-                raise ApplyError("another lucx-post-configurator change is already running") from exc
+                owner = ""
+                try:
+                    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                    pid = int(metadata.get("pid") or 0)
+                    operation = str(metadata.get("operation") or "change")
+                    if pid > 0:
+                        os.kill(pid, 0)
+                        owner = f" (PID {pid}, {operation})"
+                except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                    owner = " (владелец не определен; lock удерживается активным процессом)"
+                raise ApplyError(
+                    "другая операция lucx-post-configurator уже выполняется"
+                    + owner
+                    + "; дождитесь ее завершения"
+                ) from exc
             try:
+                metadata_path.write_text(
+                    json.dumps(
+                        {"pid": os.getpid(), "operation": "configuration", "started_at": _utc_now()},
+                        ensure_ascii=True,
+                    )
+                    + "\n",
+                    encoding="ascii",
+                )
+                os.chmod(metadata_path, 0o600)
                 yield
             finally:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                try:
+                    metadata_path.unlink()
+                except FileNotFoundError:
+                    pass
 
     def plan(self, manifest: dict[str, Any], audit: Audit | None = None) -> dict[str, Any]:
         plan = build_plan(manifest, audit)
