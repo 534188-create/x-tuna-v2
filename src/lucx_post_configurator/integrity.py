@@ -309,6 +309,12 @@ def compare_lucx(
                     "settings_clients_digest",
                 }:
                     continue
+                if field not in new_row:
+                    # The stored baseline predates the current volatile-column
+                    # policy: the field (e.g. stream_settings) is excluded from
+                    # new snapshots but still present in the old state. LucX
+                    # owns this data, so dropping the guard for it is safe.
+                    continue
                 old = old_row.get(field)
                 new = new_row.get(field)
                 if (
