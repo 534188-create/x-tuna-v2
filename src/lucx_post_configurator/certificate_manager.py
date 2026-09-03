@@ -87,12 +87,27 @@ def _safe_zone(value: str) -> str:
 
 
 def _certbot_domains(zone: str, required: list[str]) -> list[str]:
+    """Build a certificate order Let's Encrypt will accept.
+
+    A wildcard covers exactly one label level, so explicit subdomains at the
+    same level are redundant and rejected by the ACME server. Multi-level
+    names under the zone must stay in the order explicitly.
+    """
+
     outside = [name for name in required if name != zone and not name.endswith("." + zone)]
     if outside:
         raise ConfigurationError(
             "выбранная DNS-зона не покрывает домены: " + ", ".join(outside)
         )
-    return list(dict.fromkeys([zone, f"*.{zone}", *required]))
+    result = [zone, f"*.{zone}"]
+    suffix = "." + zone
+    for name in required:
+        if name == zone:
+            continue
+        rest = name[: -len(suffix)]
+        if "." in rest:
+            result.append(name)
+    return list(dict.fromkeys(result))
 
 
 def issue_certbot_cloudflare(

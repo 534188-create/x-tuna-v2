@@ -52,8 +52,39 @@ class CertificateDiscoveryTests(unittest.TestCase):
         self.assertEqual(_safe_zone("Example.COM."), "example.com")
         self.assertEqual(
             _certbot_domains("example.com", ["panel.example.com"]),
-            ["example.com", "*.example.com", "panel.example.com"],
+            ["example.com", "*.example.com"],
         )
+
+    def test_certbot_order_omits_wildcard_covered_subdomains(self) -> None:
+        from lucx_post_configurator.certificate_manager import _certbot_domains
+
+        self.assertEqual(
+            _certbot_domains(
+                "example.com",
+                [
+                    "panel.example.com",
+                    "sub.example.com",
+                    "test1.example.com",
+                    "deep.api.example.com",
+                ],
+            ),
+            ["example.com", "*.example.com", "deep.api.example.com"],
+        )
+
+    def test_certbot_order_does_not_duplicate_zone_names(self) -> None:
+        from lucx_post_configurator.certificate_manager import _certbot_domains
+
+        self.assertEqual(
+            _certbot_domains("example.com", ["example.com", "*.example.com"]),
+            ["example.com", "*.example.com"],
+        )
+
+    def test_certbot_order_rejects_domains_outside_zone(self) -> None:
+        from lucx_post_configurator.certificate_manager import _certbot_domains
+        from lucx_post_configurator.models import ConfigurationError
+
+        with self.assertRaises(ConfigurationError):
+            _certbot_domains("example.com", ["other.example.org"])
     def test_selects_longest_lived_covering_wildcard_and_stable_path(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
