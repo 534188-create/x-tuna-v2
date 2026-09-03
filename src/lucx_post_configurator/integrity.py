@@ -17,6 +17,12 @@ VOLATILE_INBOUND_COLUMNS = {
     "expiry_time",
     "last_reset_time",
     "last_traffic_reset_time",
+    # Protocol/transport settings are mutable between updates: LucX and its
+    # updater may normalise or extend them, and the user may change transports
+    # in the panel. Only structural columns (id/protocol/port/listen/enable,
+    # share_addr, host publication) and the Naive Caddyfile remain protected.
+    "settings",
+    "stream_settings",
 }
 
 
