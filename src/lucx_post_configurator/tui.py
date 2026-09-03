@@ -395,6 +395,14 @@ def _reconfigure(
                     "Обновите Naive вручную в панели LucX и повторите смену зоны."
                 )
                 return
+            # The engine reads the flag per protocol; mirror the user's answer
+            # onto every planned Naive inbound published through shared SNI.
+            for protocol in manifest.get("protocols", []):
+                if (
+                    protocol.get("protocol") == "naive"
+                    and protocol.get("exposure") == "tcp_sni"
+                ):
+                    protocol["sync_naive_endpoint"] = True
         if not status.get("selected"):
             output_fn(
                 "Подходящий сертификат не найден. Для продолжения будет выпущен "
@@ -983,11 +991,27 @@ def _main_state_banner(engine: Engine) -> str:
             if isinstance(current, int) and isinstance(total, int) and total > 0:
                 update_label += f" ({current}/{total})"
     certificate, renewal = _certificate_banner(engine)
+    decoy_roots = sorted(
+        {
+            str(site.get("root") or "").strip()
+            for site in (manifest.get("decoys") or {}).get("sites") or []
+            if str(site.get("root") or "").strip()
+        }
+    )
+    if decoy_roots:
+        if len(decoy_roots) <= 2:
+            decoy_label = ", ".join(decoy_roots)
+        else:
+            base = decoy_roots[0].rsplit("/", 1)[0] if "/" in decoy_roots[0] else decoy_roots[0]
+            decoy_label = f"{base}/<домен> ({len(decoy_roots)} сайтов)"
+    else:
+        decoy_label = "не созданы"
     return (
         f" Панель: {_public_url(manifest['lucx']['panel'])}\n"
         f" Подписка: {_public_url(manifest['lucx']['subscription'])}\n"
         f" Сертификат: {certificate}\n"
         f" Автопродление: {renewal}\n"
+        f" Файлы сайтов: {decoy_label}\n"
         f" Обновление: {update_label}"
     )
 

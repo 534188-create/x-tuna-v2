@@ -148,6 +148,18 @@ def classify_decoy_capabilities(
         if domain and valid_domain(domain):
             grouped[domain].append(protocol)
 
+    # The DNS zone apex (for example "lesovoi.store") is not owned by any
+    # protocol listener: HAProxy routes it as a standalone Nginx decoy site.
+    # Classify it explicitly so validation, health probes and the TUI treat it
+    # as a managed direct site instead of ignoring it.
+    panel_domain = _domain(
+        (manifest.get("lucx") or {}).get("panel", {}).get("domain")
+    )
+    if panel_domain and "." in panel_domain:
+        apex = panel_domain.split(".", 1)[1]
+        if valid_domain(apex) and apex not in grouped:
+            grouped[apex] = []
+
     records: list[dict[str, Any]] = []
     for domain in sorted(grouped):
         protocols = grouped[domain]

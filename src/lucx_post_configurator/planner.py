@@ -328,6 +328,26 @@ def build_plan(manifest: dict[str, Any], audit: Audit | None = None) -> dict[str
                 ],
             ),
         )
+    naive_endpoint_updates = [
+        item
+        for item in manifest.get("protocols", [])
+        if item.get("protocol") == "naive" and item.get("sync_naive_endpoint")
+    ]
+    if naive_endpoint_updates:
+        actions.insert(
+            1,
+            Action(
+                "database",
+                "lucx-naive-endpoint",
+                "After backup, update the confirmed Naive inbound endpoint fields (domain, certFile, keyFile) so LucX regenerates its Caddyfile for the new zone",
+                [manifest["lucx"]["db_path"]],
+                services=["x-ui.service"],
+                database_fields=[
+                    f"inbounds[#{int(item['inbound_id'])}].settings.domain/certFile/keyFile"
+                    for item in naive_endpoint_updates
+                ],
+            ),
+        )
     from .decoy_capabilities import classify_decoy_capabilities
 
     capabilities = list(manifest["decoys"].get("capabilities") or [])

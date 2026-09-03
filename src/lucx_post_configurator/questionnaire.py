@@ -201,19 +201,35 @@ def _subscription_sni_names(inbound: Inbound, domain: str) -> list[str]:
 
 
 def protocol_decoy_sites(manifest: dict) -> list[dict[str, str]]:
-    """Build one deterministic decoy root for every published protocol domain."""
+    """Build one deterministic decoy root for every published protocol domain.
+
+    The DNS zone apex (for example ``lesovoi.store``) is always included as a
+    standalone site: it is not owned by any protocol listener and HAProxy
+    routes it directly to the Nginx decoy frontend.
+    """
 
     sites: list[dict[str, str]] = []
     seen: set[str] = set()
-    for protocol in manifest.get("protocols", []):
-        domain = str(protocol.get("domain") or "").strip().lower().rstrip(".")
+
+    def add(domain_value: str) -> None:
+        domain = str(domain_value or "").strip().lower().rstrip(".")
         if not valid_domain(domain) or domain in seen:
-            continue
+            return
         seen.add(domain)
         safe_name = re.sub(r"[^a-z0-9.-]", "-", domain)
-        sites.append(
-            {"domain": domain, "root": f"/var/www/lucx-decoys/{safe_name}"}
-        )
+        sites.append({"domain": domain, "root": f"/var/www/lucx-decoys/{safe_name}"})
+
+    for protocol in manifest.get("protocols", []):
+        add(protocol.get("domain"))
+
+    # The zone apex of the panel domain is never owned by a protocol listener
+    # (protocols use dedicated subdomains), so a standalone decoy there is
+    # always safe and gives the browser a working site on the root domain.
+    panel_domain = str(
+        (manifest.get("lucx") or {}).get("panel", {}).get("domain") or ""
+    ).strip().lower().rstrip(".")
+    if panel_domain and "." in panel_domain:
+        add(panel_domain.split(".", 1)[1])
     return sites
 
 
@@ -967,13 +983,25 @@ def migrate_domain_zone(
     # entries from a previous failed run or an older manifest.
     migrated_sites: list[dict[str, str]] = []
     seen_sites: set[str] = set()
-    for domain in domains_by_inbound.values():
-        if not domain or domain in seen_sites:
-            continue
-        migrated_sites.append(
-            {"domain": domain, "root": f"/var/www/lucx-decoys/{domain}"}
-        )
+
+    def add_migrated_site(domain_value: str) -> None:
+        domain = str(domain_value or "").strip().lower().rstrip(".")
+        if not valid_domain(domain) or domain in seen_sites:
+            return
         seen_sites.add(domain)
+        safe_name = re.sub(r"[^a-z0-9.-]", "-", domain)
+        migrated_sites.append(
+            {"domain": domain, "root": f"/var/www/lucx-decoys/{safe_name}"}
+        )
+
+    for domain in domains_by_inbound.values():
+        add_migrated_site(domain)
+    # Always expose a standalone decoy on the new DNS zone apex. The apex is
+    # derived from the migrated panel domain so it stays consistent with
+    # protocol_decoy_sites() and classify_decoy_capabilities().
+    panel_domain = str(result["lucx"]["panel"]["domain"] or "").strip().lower().rstrip(".")
+    zone_apex = panel_domain.split(".", 1)[1] if "." in panel_domain else panel_domain
+    add_migrated_site(zone_apex)
     result.setdefault("decoys", {})["sites"] = migrated_sites
     result["decoys"]["capabilities"] = classify_decoy_capabilities(result)
     result["sidecar"]["allowed_hosts"] = [result["lucx"]["subscription"]["domain"]]

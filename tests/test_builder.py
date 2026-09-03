@@ -99,7 +99,7 @@ manifest['protocols'] = [
 manifest['decoys']['capabilities'] = classify_decoy_capabilities(manifest)
 assert manifest['schema_version'] == 3
 assert {x['status'] for x in manifest['decoys']['capabilities']} == {
-    'blocked_sni_collision', 'udp_with_tcp_decoy'
+    'blocked_sni_collision', 'udp_with_tcp_decoy', 'direct_tcp_decoy'
 }
 assert build_plan(manifest)['actions']
 assert classify_extended_decoy_routes(manifest)

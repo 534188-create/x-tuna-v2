@@ -62,9 +62,11 @@ class ReconfigureTests(unittest.TestCase):
             changed["decoys"]["extended_routes"][0]["domain"],
             "test.example.test",
         )
+        zone_apex = "example.test"
+        self.assertIn(zone_apex, [item["domain"] for item in changed["decoys"]["sites"]])
         self.assertEqual(
-            [item["domain"] for item in changed["decoys"]["capabilities"]],
-            ["test.example.test"],
+            sorted(item["domain"] for item in changed["decoys"]["capabilities"]),
+            sorted(["test.example.test", zone_apex]),
         )
     def test_changes_managed_domains_and_auto_selects_certificate_without_touching_lucx(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
