@@ -143,7 +143,9 @@ sudo lucx-sub-repair --check
 
 ## Документация
 
-Навигация по документации находится в [`docs/README_RU.md`](docs/README_RU.md).
+Навигация по документации находится в [`docs/README.md`](docs/README.md). Полный
+контекст для продолжения разработки собран в
+[`docs/PROJECT_DEVELOPMENT_CONTEXT_RU.md`](docs/PROJECT_DEVELOPMENT_CONTEXT_RU.md).
 Для разработчика главным источником являются [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
 [`docs/DEVELOPMENT_RU.md`](docs/DEVELOPMENT_RU.md) и
 [`docs/CONFIGURATION_RU.md`](docs/CONFIGURATION_RU.md).

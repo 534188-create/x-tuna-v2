@@ -11,10 +11,29 @@ from pathlib import Path
 
 LINK_RE = re.compile(r"\]\(([^)#]+)(?:#[^)]+)?\)")
 ENGLISH_HEADINGS = re.compile(r"^#{1,6}\s+(?:The |This |Architecture|Development|Acceptance|Target |Global )", re.I)
+CONTEXT_PATH = "docs/PROJECT_DEVELOPMENT_CONTEXT_RU.md"
 
 
 def check(root: Path) -> list[str]:
     errors: list[str] = []
+    context = root / CONTEXT_PATH
+    if not context.is_file():
+        errors.append(f"{context}: отсутствует основной контекст разработки")
+    else:
+        context_text = context.read_text(encoding="utf-8")
+        required_sections = (
+            "## Паспорт проекта",
+            "## Цели и границы",
+            "## Неподвижные инварианты",
+            "## Карта репозитория",
+            "## Жизненный цикл применения",
+            "## Подписки",
+            "## Обновление LucX и восстановление",
+            "## Тестовые ворота",
+        )
+        for section in required_sections:
+            if section not in context_text:
+                errors.append(f"{context}: отсутствует раздел: {section}")
     for path in sorted(root.rglob("*.md")):
         if any(part in {".git", "__pycache__", ".reference", "dist", "outputs", "work", "superpowers"} for part in path.relative_to(root).parts):
             continue
@@ -24,6 +43,8 @@ def check(root: Path) -> list[str]:
             errors.append(f"{path}: не UTF-8")
             continue
         for line_number, line in enumerate(text.splitlines(), 1):
+            if "AI_CONTEXT_RU.md" in line:
+                errors.append(f"{path}:{line_number}: устаревшее имя контекста")
             if ENGLISH_HEADINGS.search(line):
                 errors.append(f"{path}:{line_number}: англоязычный заголовок")
             for target in LINK_RE.findall(line):

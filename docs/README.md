@@ -15,14 +15,15 @@
 
 ## Для разработчика
 
-1. [`ARCHITECTURE.md`](ARCHITECTURE.md) — границы и устройство системы.
-2. [`DEVELOPMENT_RU.md`](DEVELOPMENT_RU.md) — рабочий процесс разработки.
-3. [`CONFIGURATION_RU.md`](CONFIGURATION_RU.md) — manifest schema и настройки.
-4. [`SECURITY_MODEL_RU.md`](SECURITY_MODEL_RU.md) — модель безопасности.
-5. [`TESTING_RU.md`](TESTING_RU.md) — уровни тестирования и release gates.
-6. [`ACCEPTANCE.md`](ACCEPTANCE.md) — критерии приёмки.
-7. [`RELEASE_RU.md`](RELEASE_RU.md) — сборка и публикация релиза.
-8. [`CONTRIBUTING_RU.md`](CONTRIBUTING_RU.md) — правила изменения проекта.
+1. [`PROJECT_DEVELOPMENT_CONTEXT_RU.md`](PROJECT_DEVELOPMENT_CONTEXT_RU.md) — полный контекст и карта проекта.
+2. [`ARCHITECTURE.md`](ARCHITECTURE.md) — границы и устройство системы.
+3. [`DEVELOPMENT_RU.md`](DEVELOPMENT_RU.md) — рабочий процесс разработки.
+4. [`CONFIGURATION_RU.md`](CONFIGURATION_RU.md) — manifest schema и настройки.
+5. [`SECURITY_MODEL_RU.md`](SECURITY_MODEL_RU.md) — модель безопасности.
+6. [`TESTING_RU.md`](TESTING_RU.md) — уровни тестирования и release gates.
+7. [`ACCEPTANCE.md`](ACCEPTANCE.md) — критерии приёмки.
+8. [`RELEASE_RU.md`](RELEASE_RU.md) — сборка и публикация релиза.
+9. [`CONTRIBUTING_RU.md`](CONTRIBUTING_RU.md) — правила изменения проекта.
 
 ## Для интеграционных компонентов
 
@@ -58,5 +59,7 @@ production-данными исключены из Git через `.gitignore`.
 - Файлы в `docs/superpowers/` являются историей проектирования и планирования,
   а не заменой актуальной документации. Они не проходят пользовательскую
   проверку русификации и не входят в обязательный путь чтения.
+- `PROJECT_DEVELOPMENT_CONTEXT_RU.md` является единственным полным контекстом
+  продолжения разработки.
 - Производственные отчёты, backup, реальные manifests и секреты в этот каталог
   не помещаются.

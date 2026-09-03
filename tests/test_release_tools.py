@@ -27,11 +27,52 @@ class ReleaseToolTests(unittest.TestCase):
     def test_documentation_checker_accepts_local_links(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            (root / "docs").mkdir()
             (root / "README.md").write_text(
                 "# Проект\n\n[Документ](docs.md)\n", encoding="utf-8"
             )
             (root / "docs.md").write_text("# Документ\n", encoding="utf-8")
+            (root / "docs" / "PROJECT_DEVELOPMENT_CONTEXT_RU.md").write_text(
+                "\n".join(
+                    [
+                        "## Паспорт проекта",
+                        "## Цели и границы",
+                        "## Неподвижные инварианты",
+                        "## Карта репозитория",
+                        "## Жизненный цикл применения",
+                        "## Подписки",
+                        "## Обновление LucX и восстановление",
+                        "## Тестовые ворота",
+                    ]
+                ),
+                encoding="utf-8",
+            )
             self.assertEqual(check(root), [])
+
+    def test_documentation_checker_requires_complete_development_context(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "docs").mkdir()
+            context = root / "docs" / "PROJECT_DEVELOPMENT_CONTEXT_RU.md"
+            context.write_text(
+                "\n".join(
+                    [
+                        "## Паспорт проекта",
+                        "## Цели и границы",
+                        "## Неподвижные инварианты",
+                        "## Карта репозитория",
+                        "## Жизненный цикл применения",
+                        "## Подписки",
+                        "## Обновление LucX и восстановление",
+                        "## Тестовые ворота",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(check(root), [])
+
+            context.write_text("# Неполный документ\n", encoding="utf-8")
+            self.assertTrue(check(root))
 
 
 if __name__ == "__main__":
