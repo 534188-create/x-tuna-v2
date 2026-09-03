@@ -187,6 +187,7 @@ def synchronize_lucx_publication(
     naive_publications: list[dict[str, Any]] | None = None,
     public_publications: list[dict[str, Any]] | None = None,
     certificate_paths: dict[str, str] | None = None,
+    naive_endpoint_updates: list[dict[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
     """Synchronize the explicitly allowed public URL metadata atomically.
 
@@ -195,7 +196,11 @@ def synchronize_lucx_publication(
     New LucX releases render subscriptions from enabled hosts rows before
     falling back to inbounds.share_addr, so both stores are synchronized.
     Listener ports, clients, credentials, and inbound settings JSON are never
-    selected or modified.
+    selected or modified.  The sole exception is ``naive_endpoint_updates``:
+    when the user explicitly confirms a DNS zone migration, the Naive inbound
+    settings fields ``domain``/``certFile``/``keyFile`` are rewritten so that
+    LucX itself regenerates its Caddyfile at the next restart.  The tool never
+    edits the Caddyfile directly.
     """
 
     path = fs.path(db_path)
@@ -269,6 +274,60 @@ def synchronize_lucx_publication(
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             )
         }
+        for update in naive_endpoint_updates or []:
+            inbound_id = int(update["inbound_id"])
+            row = connection.execute(
+                "SELECT protocol, settings FROM inbounds WHERE id = ?", (inbound_id,)
+            ).fetchone()
+            if row is None:
+                raise RuntimeError(f"inbound #{inbound_id} does not exist")
+            protocol_name = str(row["protocol"] or "").strip().lower()
+            if protocol_name != "naive":
+                raise RuntimeError(
+                    f"inbound #{inbound_id} is {protocol_name or 'unknown'}, not naive; "
+                    "endpoint sync refuses to touch non-Naive settings"
+                )
+            raw_settings = str(row["settings"] or "{}")
+            try:
+                parsed = json.loads(raw_settings) if raw_settings.strip() else {}
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    f"Naive inbound #{inbound_id} settings are not valid JSON; refusing to update"
+                ) from exc
+            if not isinstance(parsed, dict):
+                raise RuntimeError(
+                    f"Naive inbound #{inbound_id} settings are not a JSON object"
+                )
+            old_fields = {
+                "domain": str(parsed.get("domain") or ""),
+                "certFile": str(parsed.get("certFile") or ""),
+                "keyFile": str(parsed.get("keyFile") or ""),
+            }
+            new_fields = {
+                "domain": str(update["domain"]).strip().lower(),
+                "certFile": str(update["cert_path"]),
+                "keyFile": str(update["key_path"]),
+            }
+            if old_fields == new_fields:
+                continue
+            for field, value in new_fields.items():
+                parsed[field] = value
+            connection.execute(
+                "UPDATE inbounds SET settings = ? WHERE id = ?",
+                (json.dumps(parsed, ensure_ascii=False), inbound_id),
+            )
+            changes.append(
+                {
+                    "kind": "inbound_naive_endpoint",
+                    "inbound_id": inbound_id,
+                    "old_domain": old_fields["domain"],
+                    "new_domain": new_fields["domain"],
+                    "old_cert": old_fields["certFile"],
+                    "new_cert": new_fields["certFile"],
+                    "old_key": old_fields["keyFile"],
+                    "new_key": new_fields["keyFile"],
+                }
+            )
         host_columns: set[str] = set()
         if publications:
             inbound_columns = {
@@ -366,6 +425,24 @@ def synchronize_lucx_publication(
                 label = f"inbound #{change['inbound_id']} share_addr"
                 value = str(row["share_addr"] or "") if row else None
                 if value != change["new_value"]:
+                    raise RuntimeError(f"LucX publication synchronization verification failed for {label}")
+                continue
+            elif change["kind"] == "inbound_naive_endpoint":
+                row = connection.execute(
+                    "SELECT settings FROM inbounds WHERE id = ?", (change["inbound_id"],)
+                ).fetchone()
+                label = f"inbound #{change['inbound_id']} Naive endpoint"
+                try:
+                    parsed = json.loads(str(row["settings"] or "{}")) if row else {}
+                except json.JSONDecodeError:
+                    parsed = {}
+                value = (
+                    str(parsed.get("domain") or ""),
+                    str(parsed.get("certFile") or ""),
+                    str(parsed.get("keyFile") or ""),
+                ) if isinstance(parsed, dict) else None
+                expected = (change["new_domain"], change["new_cert"], change["new_key"])
+                if value != expected:
                     raise RuntimeError(f"LucX publication synchronization verification failed for {label}")
                 continue
             else:
@@ -512,6 +589,58 @@ def rollback_lucx_publication(
                 connection.execute(
                     "UPDATE inbounds SET stream_settings = ? WHERE id = ?",
                     (str(change.get("old_value") or ""), inbound_id),
+                )
+            elif change.get("kind") == "inbound_naive_endpoint":
+                inbound_id = int(change["inbound_id"])
+                row = connection.execute(
+                    "SELECT protocol, settings FROM inbounds WHERE id = ?", (inbound_id,)
+                ).fetchone()
+                if row is None:
+                    raise RuntimeError(f"inbound #{inbound_id} disappeared before rollback")
+                protocol_name = str(row["protocol"] or "").strip().lower()
+                if protocol_name != "naive":
+                    raise RuntimeError(
+                        f"refusing Naive endpoint rollback because inbound #{inbound_id} is {protocol_name}"
+                    )
+                raw_settings = str(row["settings"] or "{}")
+                try:
+                    parsed = json.loads(raw_settings) if raw_settings.strip() else {}
+                except json.JSONDecodeError as exc:
+                    raise RuntimeError(
+                        f"Naive inbound #{inbound_id} settings are not valid JSON; rollback refused"
+                    ) from exc
+                if not isinstance(parsed, dict):
+                    raise RuntimeError(
+                        f"Naive inbound #{inbound_id} settings are not a JSON object; rollback refused"
+                    )
+                current_fields = {
+                    "domain": str(parsed.get("domain") or ""),
+                    "certFile": str(parsed.get("certFile") or ""),
+                    "keyFile": str(parsed.get("keyFile") or ""),
+                }
+                expected_fields = {
+                    "domain": str(change["new_domain"]),
+                    "certFile": str(change["new_cert"]),
+                    "keyFile": str(change["new_key"]),
+                }
+                if current_fields != expected_fields:
+                    raise RuntimeError(
+                        f"refusing Naive endpoint rollback because inbound #{inbound_id} "
+                        "changed after apply"
+                    )
+                old_fields = {
+                    "domain": str(change["old_domain"]),
+                    "certFile": str(change["old_cert"]),
+                    "keyFile": str(change["old_key"]),
+                }
+                for field, value in old_fields.items():
+                    if value:
+                        parsed[field] = value
+                    else:
+                        parsed.pop(field, None)
+                connection.execute(
+                    "UPDATE inbounds SET settings = ? WHERE id = ?",
+                    (json.dumps(parsed, ensure_ascii=False), inbound_id),
                 )
             else:
                 inbound_id = int(change["inbound_id"])

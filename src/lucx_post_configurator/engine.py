@@ -800,6 +800,7 @@ class Engine:
                     "sync_naive_share_addr",
                     "sync_public_endpoints",
                     "sync_certificate_paths",
+                    "sync_naive_endpoint",
                 )
             ):
                 public_publications = [
@@ -810,6 +811,17 @@ class Engine:
                     }
                     for protocol in manifest.get("protocols", [])
                     if protocol.get("sync_public_endpoint")
+                ]
+                naive_endpoint_updates = [
+                    {
+                        "inbound_id": protocol["inbound_id"],
+                        "domain": protocol["domain"],
+                        "cert_path": manifest["certificates"]["cert_path"],
+                        "key_path": manifest["certificates"]["key_path"],
+                    }
+                    for protocol in manifest.get("protocols", [])
+                    if protocol.get("protocol") == "naive"
+                    and protocol.get("sync_naive_endpoint")
                 ]
                 database_changes.extend(synchronize_lucx_publication(
                     self.fs,
@@ -835,6 +847,7 @@ class Engine:
                         else None
                     ),
                     public_publications=public_publications,
+                    naive_endpoint_updates=naive_endpoint_updates,
                     certificate_paths=(
                         {
                             "cert_path": manifest["certificates"]["cert_path"],
@@ -1000,9 +1013,12 @@ class Engine:
                 )
             self._activate(generated, resolver)
             decoy_results: list[dict[str, Any]] = []
+            live_audit = self.audit(manifest["lucx"]["db_path"])
             live_errors = validate_live_configuration(
                 manifest,
                 self.runner,
+                fs=self.fs,
+                audit=live_audit,
                 decoy_results=decoy_results,
             )
             if live_errors:
@@ -1250,7 +1266,7 @@ class Engine:
         errors.extend(validate_certificate(self.fs, manifest, self.runner))
         errors.extend(validate_lucx_tls_coverage(self.fs, audit, manifest, self.runner))
         if self.fs.is_live and include_live:
-            errors.extend(validate_live_configuration(manifest, self.runner))
+            errors.extend(validate_live_configuration(manifest, self.runner, fs=self.fs, audit=audit))
         changed = []
         for target, expected in (state.get("installed_hashes") or {}).items():
             path = self.fs.path(target)

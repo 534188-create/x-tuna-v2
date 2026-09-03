@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from lucx_post_configurator.models import Audit, ConfigurationError, default_manifest, validate_manifest
+from lucx_post_configurator.models import Audit, ConfigurationError, Inbound, default_manifest, validate_manifest
 from lucx_post_configurator.validation import validate_audit_against_manifest
 from lucx_post_configurator.validation import (
     _direct_decoy_domains,
@@ -12,6 +12,7 @@ from lucx_post_configurator.validation import (
     _parse_ss_listener_ports,
     _parse_ss_tcp_listeners,
     _validate_trusttunnel_firewall_listing,
+    validate_certificate,
 )
 
 
@@ -41,6 +42,211 @@ class ValidationTests(unittest.TestCase):
             "LucX subPort is <invalid>",
             "\n".join(errors),
         )
+    def test_naive_endpoint_sync_defers_caddyfile_checks_until_after_restart(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temporary:
+            from pathlib import Path as _Path
+
+            root = _Path(temporary)
+            audit = Audit(
+                os_id="debian",
+                os_version="13",
+                supported_os=True,
+                db_path="/etc/x-ui/x-ui.db",
+                db_schema_supported=True,
+                settings={
+                    "webDomain": "panel.new-zone.test",
+                    "webPort": "2083",
+                    "subDomain": "sub.new-zone.test",
+                    "subPort": "2096",
+                    "subPath": "/sub/",
+                    "webCertFile": "/certs/old/fullchain.pem",
+                    "webKeyFile": "/certs/old/privkey.pem",
+                },
+                inbounds=[
+                    Inbound(
+                        id=5,
+                        protocol="naive",
+                        remark="naive",
+                        enable=True,
+                        listen="",
+                        port=52354,
+                        share_addr="test5.old-zone.test",
+                        suggested_public_port=443,
+                        network="tcp",
+                        security="tls",
+                        server_names=[],
+                        port_bindings=[],
+                    )
+                ],
+                naive_caddyfile={
+                    "found": True,
+                    "path": "/usr/local/x-ui/bin/tunnel/naive-5.caddyfile",
+                    "files": [
+                        {
+                            "path": "/usr/local/x-ui/bin/tunnel/naive-5.caddyfile",
+                            "found": True,
+                        }
+                    ],
+                },
+            )
+            manifest = default_manifest(audit)
+            manifest["lucx"]["panel"]["domain"] = "panel.new-zone.test"
+            manifest["lucx"]["subscription"]["domain"] = "sub.new-zone.test"
+            manifest["lucx"]["settings_management"].update(
+                {
+                    "sync_domains": True,
+                    "sync_certificate_paths": True,
+                    "sync_naive_endpoint": True,
+                    "user_confirmed": True,
+                }
+            )
+            manifest["certificates"]["cert_path"] = "/certs/new/fullchain.pem"
+            manifest["certificates"]["key_path"] = "/certs/new/privkey.pem"
+            manifest["protocols"] = [
+                {
+                    "inbound_id": 5,
+                    "protocol": "naive",
+                    "remark": "naive",
+                    "domain": "test5.new-zone.test",
+                    "internal_host": "127.0.0.1",
+                    "internal_port": 52354,
+                    "public_port": 443,
+                    "network": "tcp",
+                    "exposure": "tcp_sni",
+                    "security": "tls",
+                    "sni_names": ["test5.new-zone.test"],
+                    "sync_naive_endpoint": True,
+                    "sync_public_endpoint": True,
+                }
+            ]
+            # The staged Caddyfile still describes the old zone: with a
+            # confirmed endpoint sync the strict text checks must be deferred
+            # to the post-restart health phase instead of blocking apply.
+            (root / "usr/local/x-ui/bin/tunnel").mkdir(parents=True)
+            (root / "usr/local/x-ui/bin/tunnel/naive-5.caddyfile").write_text(
+                "test5.old-zone.test:52354 {\n  tls /certs/old/fullchain.pem /certs/old/privkey.pem\n}\n",
+                encoding="utf-8",
+            )
+            # The new certificate pair must exist for other checks.
+            (root / "certs/new").mkdir(parents=True)
+            (root / "certs/new/fullchain.pem").write_text("stub", encoding="utf-8")
+            (root / "certs/new/privkey.pem").write_text("stub", encoding="utf-8")
+
+            from lucx_post_configurator.runner import Runner
+            from lucx_post_configurator.targetfs import TargetFS
+
+            fs = TargetFS(root)
+            runner = Runner(dry_run=True)
+            errors = validate_certificate(fs, manifest, runner)
+            caddy_errors = [
+                item for item in errors if "visibly cover" in item or "Caddyfile" in item
+            ]
+            self.assertEqual(caddy_errors, [])
+
+    def test_live_configuration_verifies_regenerated_naive_caddyfile(self) -> None:
+        import tempfile
+
+        from lucx_post_configurator.runner import Runner
+        from lucx_post_configurator.targetfs import TargetFS
+        from lucx_post_configurator.validation import validate_live_configuration
+
+        manifest = default_manifest()
+        manifest["lucx"]["panel"]["domain"] = "panel.new-zone.test"
+        manifest["lucx"]["subscription"]["domain"] = "sub.new-zone.test"
+        manifest["certificates"]["cert_path"] = "/certs/new/fullchain.pem"
+        manifest["certificates"]["key_path"] = "/certs/new/privkey.pem"
+        manifest["certificates"]["managed"] = False
+        manifest["protocols"] = [
+            {
+                "inbound_id": 5,
+                "protocol": "naive",
+                "remark": "naive",
+                "domain": "test5.new-zone.test",
+                "internal_host": "127.0.0.1",
+                "internal_port": 52354,
+                "public_port": 443,
+                "network": "tcp",
+                "exposure": "tcp_sni",
+                "security": "tls",
+                "sni_names": ["test5.new-zone.test"],
+                "sync_naive_endpoint": True,
+                "sync_public_endpoint": True,
+            }
+        ]
+
+        def build_audit(caddy_text: str):
+            audit = Audit(
+                os_id="debian",
+                os_version="13",
+                supported_os=True,
+                db_path="/etc/x-ui/x-ui.db",
+                db_schema_supported=True,
+                settings={},
+                inbounds=[
+                    Inbound(
+                        id=5,
+                        protocol="naive",
+                        remark="naive",
+                        enable=True,
+                        listen="",
+                        port=52354,
+                        share_addr="test5.new-zone.test",
+                        suggested_public_port=443,
+                        network="tcp",
+                        security="tls",
+                    )
+                ],
+                naive_caddyfile={
+                    "found": True,
+                    "files": [
+                        {"path": "/usr/local/x-ui/bin/tunnel/naive-5.caddyfile", "found": True}
+                    ],
+                },
+            )
+            return audit
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            caddy_dir = root / "usr/local/x-ui/bin/tunnel"
+            caddy_dir.mkdir(parents=True)
+            caddy_path = caddy_dir / "naive-5.caddyfile"
+            fs = TargetFS(root)
+            runner = Runner(dry_run=True)
+
+            # Positive: LucX regenerated the file with the new zone and pair.
+            caddy_path.write_text(
+                "test5.new-zone.test:52354 {\n"
+                "  tls /certs/new/fullchain.pem /certs/new/privkey.pem\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            errors = validate_live_configuration(
+                manifest, runner, fs=fs, audit=build_audit(caddy_path.read_text(encoding="utf-8"))
+            )
+            self.assertEqual(
+                [item for item in errors if "did not regenerate" in item],
+                [],
+            )
+
+            # Negative: the file still describes the old zone.
+            caddy_path.write_text(
+                "test5.old-zone.test:52354 {\n"
+                "  tls /certs/old/fullchain.pem /certs/old/privkey.pem\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            errors = validate_live_configuration(
+                manifest, runner, fs=fs, audit=build_audit(caddy_path.read_text(encoding="utf-8"))
+            )
+            self.assertTrue(
+                any(
+                    "did not regenerate" in item and "inbound #5" in item
+                    for item in errors
+                ),
+                errors,
+            )
     def test_live_firewall_requires_both_trusttunnel_transport_drop_rules(self) -> None:
         manifest = default_manifest()
         manifest["decoys"]["routing_mode"] = "extended"

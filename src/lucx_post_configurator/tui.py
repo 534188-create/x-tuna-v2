@@ -374,6 +374,27 @@ def _reconfigure(
             output_fn,
             lambda: certificate_status_for_manifest(engine, manifest),
         )
+        has_naive = any(
+            item.get("protocol") == "naive" and item.get("exposure") == "tcp_sni"
+            for item in manifest.get("protocols", [])
+        )
+        sync_naive_endpoint = False
+        if has_naive:
+            output_fn(
+                "Обнаружен Naive. Его Caddyfile генерируется LucX из настроек inbound; "
+                "этот инструмент никогда не редактирует файл напрямую."
+            )
+            sync_naive_endpoint = _yes_no(
+                "Синхронизировать Naive с новой зоной (домен и пути сертификата в настройках LucX)?",
+                input_fn,
+                output_fn,
+            )
+            if not sync_naive_endpoint:
+                output_fn(
+                    "Отменено: без синхронизации Naive продолжит отдавать старый домен и сертификат. "
+                    "Обновите Naive вручную в панели LucX и повторите смену зоны."
+                )
+                return
         if not status.get("selected"):
             output_fn(
                 "Подходящий сертификат не найден. Для продолжения будет выпущен "
@@ -414,7 +435,11 @@ def _reconfigure(
         manifest["certificates"]["key_path"] = selected["key_path"]
         manifest["components"]["tls_hook"] = True
         manifest.setdefault("lucx", {}).setdefault("settings_management", {}).update(
-            {"sync_certificate_paths": True, "user_confirmed": True}
+            {
+                "sync_certificate_paths": True,
+                "sync_naive_endpoint": sync_naive_endpoint,
+                "user_confirmed": True,
+            }
         )
         audit = _run_progress(
             "Read-only аудит перед применением новой DNS-зоны",

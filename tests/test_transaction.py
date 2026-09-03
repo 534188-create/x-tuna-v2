@@ -504,6 +504,134 @@ class TransactionTests(unittest.TestCase):
             finally:
                 connection.close()
 
+    def test_naive_endpoint_sync_writes_three_fields_and_rolls_back(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            database = make_target(root)
+            fs = TargetFS(root)
+            connection = __import__("sqlite3").connect(database)
+            connection.execute(
+                "UPDATE inbounds SET protocol = 'naive', settings = ? WHERE id = 1",
+                (
+                    json.dumps(
+                        {
+                            "clients": [{"password": "must-not-leak"}],
+                            "domain": "old.example.com",
+                            "certFile": "/old/fullchain.pem",
+                            "keyFile": "/old/privkey.pem",
+                            "useAcme": False,
+                            "routeThroughXray": True,
+                        }
+                    ),
+                ),
+            )
+            connection.commit()
+            connection.close()
+
+            changes = synchronize_lucx_publication(
+                fs,
+                "/etc/x-ui/x-ui.db",
+                panel_domain=None,
+                subscription_domain=None,
+                naive_endpoint_updates=[
+                    {
+                        "inbound_id": 1,
+                        "domain": "naive.new-zone.example",
+                        "cert_path": "/etc/letsencrypt/live/new-zone.example/fullchain.pem",
+                        "key_path": "/etc/letsencrypt/live/new-zone.example/privkey.pem",
+                    }
+                ],
+            )
+            self.assertEqual(len(changes), 1)
+            change = changes[0]
+            self.assertEqual(change["kind"], "inbound_naive_endpoint")
+            self.assertEqual(change["old_domain"], "old.example.com")
+            self.assertEqual(change["new_domain"], "naive.new-zone.example")
+            self.assertEqual(change["old_cert"], "/old/fullchain.pem")
+            self.assertEqual(change["new_cert"], "/etc/letsencrypt/live/new-zone.example/fullchain.pem")
+            self.assertEqual(change["old_key"], "/old/privkey.pem")
+            self.assertEqual(change["new_key"], "/etc/letsencrypt/live/new-zone.example/privkey.pem")
+
+            connection = __import__("sqlite3").connect(database)
+            raw = connection.execute("SELECT settings FROM inbounds WHERE id = 1").fetchone()[0]
+            connection.close()
+            parsed = json.loads(raw)
+            self.assertEqual(parsed["domain"], "naive.new-zone.example")
+            self.assertEqual(parsed["certFile"], "/etc/letsencrypt/live/new-zone.example/fullchain.pem")
+            self.assertEqual(parsed["keyFile"], "/etc/letsencrypt/live/new-zone.example/privkey.pem")
+            # Other Naive settings and secrets must be preserved verbatim.
+            self.assertEqual(parsed["useAcme"], False)
+            self.assertEqual(parsed["routeThroughXray"], True)
+            self.assertEqual(parsed["clients"], [{"password": "must-not-leak"}])
+
+            rollback_lucx_publication(fs, "/etc/x-ui/x-ui.db", changes)
+            connection = __import__("sqlite3").connect(database)
+            raw = connection.execute("SELECT settings FROM inbounds WHERE id = 1").fetchone()[0]
+            connection.close()
+            parsed = json.loads(raw)
+            self.assertEqual(parsed["domain"], "old.example.com")
+            self.assertEqual(parsed["certFile"], "/old/fullchain.pem")
+            self.assertEqual(parsed["keyFile"], "/old/privkey.pem")
+            self.assertEqual(parsed["clients"], [{"password": "must-not-leak"}])
+
+    def test_naive_endpoint_sync_refuses_non_naive_inbound(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            make_target(root)
+            fs = TargetFS(root)
+            with self.assertRaises(RuntimeError):
+                synchronize_lucx_publication(
+                    fs,
+                    "/etc/x-ui/x-ui.db",
+                    panel_domain=None,
+                    subscription_domain=None,
+                    naive_endpoint_updates=[
+                        {
+                            "inbound_id": 1,
+                            "domain": "naive.new-zone.example",
+                            "cert_path": "/cert/fullchain.pem",
+                            "key_path": "/cert/privkey.pem",
+                        }
+                    ],
+                )
+
+    def test_naive_endpoint_sync_is_idempotent_when_fields_already_match(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            database = make_target(root)
+            fs = TargetFS(root)
+            connection = __import__("sqlite3").connect(database)
+            connection.execute(
+                "UPDATE inbounds SET protocol = 'naive', settings = ? WHERE id = 1",
+                (
+                    json.dumps(
+                        {
+                            "domain": "naive.new-zone.example",
+                            "certFile": "/cert/fullchain.pem",
+                            "keyFile": "/cert/privkey.pem",
+                        }
+                    ),
+                ),
+            )
+            connection.commit()
+            connection.close()
+
+            changes = synchronize_lucx_publication(
+                fs,
+                "/etc/x-ui/x-ui.db",
+                panel_domain=None,
+                subscription_domain=None,
+                naive_endpoint_updates=[
+                    {
+                        "inbound_id": 1,
+                        "domain": "naive.new-zone.example",
+                        "cert_path": "/cert/fullchain.pem",
+                        "key_path": "/cert/privkey.pem",
+                    }
+                ],
+            )
+            self.assertEqual(changes, [])
+
 
 if __name__ == "__main__":
     unittest.main()

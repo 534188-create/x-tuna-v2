@@ -138,6 +138,7 @@ def default_manifest(audit: Audit | None = None) -> dict[str, Any]:
                 "sync_public_endpoints": False,
                 "allow_inbound_changes": False,
                 "sync_certificate_paths": False,
+                "sync_naive_endpoint": False,
                 "user_confirmed": False,
             },
         },
@@ -289,9 +290,16 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             "sync_naive_share_addr",
             "sync_public_endpoints",
             "sync_certificate_paths",
+            "sync_naive_endpoint",
         )
     ) and settings_management.get("user_confirmed") is not True:
         raise ConfigurationError("LucX publication synchronization requires explicit confirmation")
+    if settings_management.get("sync_naive_endpoint") and not (
+        settings_management.get("sync_certificate_paths")
+    ):
+        raise ConfigurationError(
+            "sync_naive_endpoint requires sync_certificate_paths to publish the selected pair to LucX"
+        )
     subscription_urls = lucx.get("subscription", {}).get("public_base_url")
     if settings_management.get("sync_subscription_urls"):
         base = str(subscription_urls or "").strip()

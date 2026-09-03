@@ -121,6 +121,14 @@ def validate_lucx_tls_coverage(
         for protocol in manifest.get("protocols", [])
         if protocol.get("protocol") == "naive" and protocol.get("exposure") == "tcp_sni"
     ]
+    # When the user explicitly confirmed a DNS zone migration, the Naive
+    # inbound settings are rewritten inside this same transaction and LucX
+    # regenerates its Caddyfile at the x-ui restart.  The pre-commit file
+    # still describes the old zone, so the strict read-only text checks below
+    # would always fail; they are enforced after the restart instead
+    # (validate_live_configuration), while rollback restores the database.
+    if any(protocol.get("sync_naive_endpoint") for protocol in planned_naive):
+        return errors
     if planned_naive and not caddy.get("found"):
         if not fs.is_live:
             errors.append(
@@ -557,6 +565,8 @@ def validate_live_configuration(
     manifest: dict[str, Any],
     runner: Runner,
     *,
+    fs: TargetFS | None = None,
+    audit: Audit | None = None,
     decoy_results: list[dict[str, Any]] | None = None,
 ) -> list[str]:
     errors: list[str] = []
@@ -818,4 +828,39 @@ def validate_live_configuration(
                     errors.append(
                         f"managed decoy HTTPS probe failed for {item['domain']}: {item['detail']}"
                     )
+    # After a confirmed zone migration LucX regenerated the Naive Caddyfile
+    # during the x-ui restart. Verify the regenerated file actually covers the
+    # planned SNI and certificate pair; a failure here triggers the standard
+    # rollback of the whole transaction.
+    if fs is not None and audit is not None and any(
+        protocol.get("sync_naive_endpoint")
+        and protocol.get("exposure") == "tcp_sni"
+        for protocol in manifest.get("protocols", [])
+        if protocol.get("protocol") == "naive"
+    ):
+        for protocol in manifest.get("protocols", []):
+            if protocol.get("protocol") != "naive" or protocol.get("exposure") != "tcp_sni":
+                continue
+            names = [str(value).lower() for value in (protocol.get("sni_names") or [protocol.get("domain", "")])]
+            selected_cert = str(manifest["certificates"]["cert_path"]).lower()
+            selected_key = str(manifest["certificates"]["key_path"]).lower()
+            regenerated_ok = False
+            last_detail = ""
+            for candidate in (audit.naive_caddyfile or {}).get("files") or []:
+                try:
+                    text = fs.read_text(str(candidate["path"])).lower()
+                except (OSError, ValueError):
+                    last_detail = f"cannot read {candidate['path']}"
+                    continue
+                has_pair = selected_cert in text and selected_key in text
+                has_sni = any(str(value).lower() in text for value in names)
+                if has_pair and has_sni:
+                    regenerated_ok = True
+                    break
+                last_detail = f"{candidate['path']}: pair={has_pair} sni={has_sni}"
+            if not regenerated_ok:
+                errors.append(
+                    "LucX did not regenerate the Naive Caddyfile for the new zone "
+                    f"(inbound #{protocol['inbound_id']}; {last_detail})"
+                )
     return errors
