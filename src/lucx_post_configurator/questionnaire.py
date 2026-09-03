@@ -160,7 +160,7 @@ def _inbound_routing_metadata(inbound: Inbound) -> dict:
 
 
 def infer_exposure(protocol: str, network: str, public_port: int, security: str = "") -> str:
-    if public_port == 443 and network == "tcp" and (
+    if public_port == 443 and network in {"tcp", "both"} and (
         security in {"tls", "reality"} or protocol in {
         "naive",
         "trojan",
@@ -174,6 +174,16 @@ def infer_exposure(protocol: str, network: str, public_port: int, security: str 
     if network == "both":
         return "tcp_udp_direct"
     return "tcp_direct"
+
+
+def default_public_port_for_inbound(inbound: Inbound) -> int:
+    """Choose the public default without confusing a TCP listener with its endpoint."""
+    if inbound.network in {"tcp", "both"} and (
+        inbound.security in {"tls", "reality"}
+        or inbound.protocol in {"naive", "trojan", "anytls", "trusttunnel"}
+    ):
+        return 443
+    return int(inbound.suggested_public_port or inbound.port)
 
 
 def _subscription_sni_names(inbound: Inbound, domain: str) -> list[str]:
@@ -524,10 +534,11 @@ def build_manifest_interactively(
             output_fn=output_fn,
             validator=valid_domain,
         ).lower()
+        default_public_port = default_public_port_for_inbound(inbound)
         public_port = int(
             _ask(
                 "Внешний основной порт",
-                str(inbound.suggested_public_port or inbound.port),
+                str(default_public_port),
                 input_fn=input_fn,
                 output_fn=output_fn,
                 validator=_port,

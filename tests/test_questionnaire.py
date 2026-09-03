@@ -4,6 +4,7 @@ import unittest
 
 from lucx_post_configurator.models import Audit, Inbound, default_manifest
 from lucx_post_configurator.questionnaire import (
+    default_public_port_for_inbound,
     _select_numbered_domains,
     _yes_no,
     build_manifest_interactively,
@@ -82,6 +83,20 @@ class NumberedDomainSelectionTests(unittest.TestCase):
 
 
 class QuestionnaireTests(unittest.TestCase):
+    def test_trusttunnel_defaults_to_shared_https_port(self) -> None:
+        audit = _audit("trusttunnel")
+        inbound = audit.inbounds[0]
+        inbound.network = "tcp"
+        inbound.port = 8443
+        inbound.suggested_public_port = 8443
+        inbound.security = "tls"
+        self.assertEqual(default_public_port_for_inbound(inbound), 443)
+
+    def test_non_tls_direct_inbound_keeps_its_listener_port(self) -> None:
+        audit = _audit("mieru")
+        inbound = audit.inbounds[0]
+        self.assertEqual(default_public_port_for_inbound(inbound), inbound.port)
+
     def test_extended_decoy_mode_is_built_from_current_audit_and_can_return_to_strict(self) -> None:
         audit = _audit("vless")
         audit.inbounds[0].security = "tls"

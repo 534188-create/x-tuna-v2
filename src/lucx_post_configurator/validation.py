@@ -247,11 +247,12 @@ def validate_audit_against_manifest(
         errors.append(
             f"LucX subDomain is {actual_sub_domain or '<empty>'}, but the manifest requires {expected_sub_domain}; save the new domain in LucX first"
         )
+    raw_sub_port = str(audit.settings.get("subPort") or "").strip()
     try:
-        actual_sub_port = int(audit.settings.get("subPort", ""))
+        actual_sub_port = int(raw_sub_port)
     except ValueError:
         actual_sub_port = 0
-    if actual_sub_port != int(manifest["lucx"]["subscription"]["internal_port"]):
+    if raw_sub_port and actual_sub_port != int(manifest["lucx"]["subscription"]["internal_port"]):
         errors.append(
             f"LucX subPort is {actual_sub_port or '<invalid>'}, but the manifest requires {manifest['lucx']['subscription']['internal_port']}"
         )

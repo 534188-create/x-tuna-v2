@@ -3,7 +3,8 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from lucx_post_configurator.models import ConfigurationError, default_manifest, validate_manifest
+from lucx_post_configurator.models import Audit, ConfigurationError, default_manifest, validate_manifest
+from lucx_post_configurator.validation import validate_audit_against_manifest
 from lucx_post_configurator.validation import (
     _direct_decoy_domains,
     _managed_naive_adapt_commands,
@@ -15,6 +16,31 @@ from lucx_post_configurator.validation import (
 
 
 class ValidationTests(unittest.TestCase):
+    def test_empty_lucx_sub_port_is_allowed_for_fresh_install(self) -> None:
+        audit = Audit(
+            os_id="debian",
+            os_version="13",
+            supported_os=True,
+            db_path="/etc/x-ui/x-ui.db",
+            db_schema_supported=True,
+            settings={
+                "webDomain": "panel.example.test",
+                "webPort": "2083",
+                "subDomain": "sub.example.test",
+                "subPath": "/sub/",
+                "subPort": "",
+            },
+        )
+        audit.settings["subPort"] = ""
+        manifest = default_manifest(audit)
+        manifest["lucx"]["settings_management"].update(
+            {"sync_domains": True, "user_confirmed": True}
+        )
+        errors = validate_audit_against_manifest(audit, manifest)
+        self.assertNotIn(
+            "LucX subPort is <invalid>",
+            "\n".join(errors),
+        )
     def test_live_firewall_requires_both_trusttunnel_transport_drop_rules(self) -> None:
         manifest = default_manifest()
         manifest["decoys"]["routing_mode"] = "extended"
