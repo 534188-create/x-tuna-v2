@@ -176,6 +176,118 @@ def backup_lucx_database(fs: TargetFS, backup: Backup, db_path: str) -> dict[str
     return record
 
 
+MISSING = object()
+
+# Hostname-like inbound settings keys used by LucX tunnel protocols. Only a key
+# that already exists and still holds the previous public domain is rewritten,
+# so a protocol or LucX version we do not know cannot be corrupted.
+ENDPOINT_NAME_KEYS = ("domain", "hostname", "sni", "serverName")
+ENDPOINT_CERT_KEYS = (("certFile", "cert"), ("keyFile", "key"))
+
+
+def _json_get(obj: Any, path: tuple[Any, ...]) -> Any:
+    current = obj
+    for step in path:
+        if isinstance(step, int):
+            if not isinstance(current, list) or step >= len(current):
+                return MISSING
+            current = current[step]
+            continue
+        if not isinstance(current, dict) or step not in current:
+            return MISSING
+        current = current[step]
+    return current
+
+
+def _json_set(obj: Any, path: tuple[Any, ...], value: Any) -> None:
+    current = obj
+    for step in path[:-1]:
+        current = current[step]
+    current[path[-1]] = value
+
+
+def _json_unset(obj: Any, path: tuple[Any, ...]) -> None:
+    current = obj
+    for step in path[:-1]:
+        current = current[step]
+    if isinstance(path[-1], int):
+        return
+    if isinstance(current, dict):
+        current.pop(path[-1], None)
+
+
+def _endpoint_field_plan(
+    document: Any,
+    *,
+    old_domain: str,
+    new_domain: str,
+    cert_path: str,
+    key_path: str,
+    name_paths: tuple[tuple[Any, ...], ...],
+    cert_paths: tuple[tuple[tuple[Any, ...], str], ...],
+) -> list[dict[str, Any]]:
+    """Return the exact field rewrites required for one JSON column."""
+
+    planned: list[dict[str, Any]] = []
+    for path in name_paths:
+        current = _json_get(document, path)
+        if current is MISSING or not isinstance(current, str):
+            continue
+        if current.strip().lower() != old_domain:
+            continue
+        if current == new_domain:
+            continue
+        planned.append({"path": list(path), "old": current, "new": new_domain, "existed": True})
+    for path, kind in cert_paths:
+        current = _json_get(document, path)
+        if current is MISSING or not isinstance(current, str):
+            continue
+        if not current.startswith("/"):
+            continue
+        replacement = cert_path if kind == "cert" else key_path
+        if current == replacement:
+            continue
+        planned.append({"path": list(path), "old": current, "new": replacement, "existed": True})
+    return planned
+
+
+def _settings_endpoint_paths(
+    document: Any,
+) -> tuple[tuple[tuple[Any, ...], ...], tuple[tuple[tuple[Any, ...], str], ...]]:
+    if not isinstance(document, dict):
+        return (), ()
+    names = tuple((key,) for key in ENDPOINT_NAME_KEYS if key in document)
+    certs = tuple(((key,), kind) for key, kind in ENDPOINT_CERT_KEYS if key in document)
+    return names, certs
+
+
+def _stream_endpoint_paths(
+    document: Any,
+) -> tuple[tuple[tuple[Any, ...], ...], tuple[tuple[tuple[Any, ...], str], ...]]:
+    if not isinstance(document, dict):
+        return (), ()
+    if str(document.get("security") or "").strip().lower() == "reality":
+        # Reality camouflage serverNames are third-party domains; never rewrite.
+        return (), ()
+    tls = document.get("tlsSettings")
+    if not isinstance(tls, dict):
+        return (), ()
+    names: list[tuple[Any, ...]] = []
+    if "serverName" in tls:
+        names.append(("tlsSettings", "serverName"))
+    certs: list[tuple[tuple[Any, ...], str]] = []
+    certificates = tls.get("certificates")
+    if isinstance(certificates, list):
+        for index, entry in enumerate(certificates):
+            if not isinstance(entry, dict):
+                continue
+            if "certificateFile" in entry:
+                certs.append((("tlsSettings", "certificates", index, "certificateFile"), "cert"))
+            if "keyFile" in entry:
+                certs.append((("tlsSettings", "certificates", index, "keyFile"), "key"))
+    return tuple(names), tuple(certs)
+
+
 def synchronize_lucx_publication(
     fs: TargetFS,
     db_path: str,
@@ -187,7 +299,7 @@ def synchronize_lucx_publication(
     naive_publications: list[dict[str, Any]] | None = None,
     public_publications: list[dict[str, Any]] | None = None,
     certificate_paths: dict[str, str] | None = None,
-    naive_endpoint_updates: list[dict[str, str]] | None = None,
+    endpoint_updates: list[dict[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
     """Synchronize the explicitly allowed public URL metadata atomically.
 
@@ -195,12 +307,14 @@ def synchronize_lucx_publication(
     public endpoint metadata of explicitly selected inbounds are writable.
     New LucX releases render subscriptions from enabled hosts rows before
     falling back to inbounds.share_addr, so both stores are synchronized.
-    Listener ports, clients, credentials, and inbound settings JSON are never
-    selected or modified.  The sole exception is ``naive_endpoint_updates``:
-    when the user explicitly confirms a DNS zone migration, the Naive inbound
-    settings fields ``domain``/``certFile``/``keyFile`` are rewritten so that
-    LucX itself regenerates its Caddyfile at the next restart.  The tool never
-    edits the Caddyfile directly.
+    Listener ports, clients, credentials, and unrelated inbound settings are
+    never selected or modified.  The sole exception is ``endpoint_updates``:
+    when the user explicitly confirms a DNS zone migration, hostname-like
+    fields (Naive ``domain``, TrustTunnel ``hostname``, AnyTLS ``sni``,
+    Xray ``tlsSettings.serverName``) and previously configured absolute
+    certificate/key paths are rewritten so LucX itself regenerates tunnel
+    configuration files at the next restart.  The tool never edits generated
+    tunnel files directly.
     """
 
     path = fs.path(db_path)
@@ -274,58 +388,64 @@ def synchronize_lucx_publication(
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             )
         }
-        for update in naive_endpoint_updates or []:
+        for update in endpoint_updates or []:
             inbound_id = int(update["inbound_id"])
             row = connection.execute(
-                "SELECT protocol, settings FROM inbounds WHERE id = ?", (inbound_id,)
+                "SELECT protocol, settings, stream_settings FROM inbounds WHERE id = ?",
+                (inbound_id,),
             ).fetchone()
             if row is None:
                 raise RuntimeError(f"inbound #{inbound_id} does not exist")
             protocol_name = str(row["protocol"] or "").strip().lower()
-            if protocol_name != "naive":
+            new_domain = str(update["domain"]).strip().lower()
+            old_domain = str(update.get("old_domain") or "").strip().lower()
+            approved = certificate_paths or {}
+            cert_path = str(update.get("cert_path") or approved.get("cert_path") or "")
+            key_path = str(update.get("key_path") or approved.get("key_path") or "")
+            if not cert_path or not key_path:
                 raise RuntimeError(
-                    f"inbound #{inbound_id} is {protocol_name or 'unknown'}, not naive; "
-                    "endpoint sync refuses to touch non-Naive settings"
+                    f"endpoint sync for inbound #{inbound_id} requires the approved certificate pair"
                 )
-            raw_settings = str(row["settings"] or "{}")
-            try:
-                parsed = json.loads(raw_settings) if raw_settings.strip() else {}
-            except json.JSONDecodeError as exc:
-                raise RuntimeError(
-                    f"Naive inbound #{inbound_id} settings are not valid JSON; refusing to update"
-                ) from exc
-            if not isinstance(parsed, dict):
-                raise RuntimeError(
-                    f"Naive inbound #{inbound_id} settings are not a JSON object"
+            rewrites: list[dict[str, Any]] = []
+            for column, path_builder in (
+                ("settings", _settings_endpoint_paths),
+                ("stream_settings", _stream_endpoint_paths),
+            ):
+                raw = str(row[column] or "{}")
+                try:
+                    document = json.loads(raw) if raw.strip() else {}
+                except json.JSONDecodeError as exc:
+                    raise RuntimeError(
+                        f"inbound #{inbound_id} {column} is not valid JSON; refusing to update"
+                    ) from exc
+                names, certs = path_builder(document)
+                planned = _endpoint_field_plan(
+                    document,
+                    old_domain=old_domain,
+                    new_domain=new_domain,
+                    cert_path=cert_path,
+                    key_path=key_path,
+                    name_paths=names,
+                    cert_paths=certs,
                 )
-            old_fields = {
-                "domain": str(parsed.get("domain") or ""),
-                "certFile": str(parsed.get("certFile") or ""),
-                "keyFile": str(parsed.get("keyFile") or ""),
-            }
-            new_fields = {
-                "domain": str(update["domain"]).strip().lower(),
-                "certFile": str(update["cert_path"]),
-                "keyFile": str(update["key_path"]),
-            }
-            if old_fields == new_fields:
+                if not planned:
+                    continue
+                for item in planned:
+                    path = tuple(item["path"])
+                    _json_set(document, path, item["new"])
+                connection.execute(
+                    f"UPDATE inbounds SET {column} = ? WHERE id = ?",
+                    (json.dumps(document, ensure_ascii=False), inbound_id),
+                )
+                rewrites.append({"column": column, "fields": planned})
+            if not rewrites:
                 continue
-            for field, value in new_fields.items():
-                parsed[field] = value
-            connection.execute(
-                "UPDATE inbounds SET settings = ? WHERE id = ?",
-                (json.dumps(parsed, ensure_ascii=False), inbound_id),
-            )
             changes.append(
                 {
-                    "kind": "inbound_naive_endpoint",
+                    "kind": "inbound_endpoint",
                     "inbound_id": inbound_id,
-                    "old_domain": old_fields["domain"],
-                    "new_domain": new_fields["domain"],
-                    "old_cert": old_fields["certFile"],
-                    "new_cert": new_fields["certFile"],
-                    "old_key": old_fields["keyFile"],
-                    "new_key": new_fields["keyFile"],
+                    "protocol": protocol_name,
+                    "rewrites": rewrites,
                 }
             )
         host_columns: set[str] = set()
@@ -427,22 +547,41 @@ def synchronize_lucx_publication(
                 if value != change["new_value"]:
                     raise RuntimeError(f"LucX publication synchronization verification failed for {label}")
                 continue
-            elif change["kind"] == "inbound_naive_endpoint":
+            elif change["kind"] in ("inbound_naive_endpoint", "inbound_endpoint"):
+                # Legacy records keep only the three Naive fields; generalized
+                # records carry a per-field rewrite list for verification.
                 row = connection.execute(
                     "SELECT settings FROM inbounds WHERE id = ?", (change["inbound_id"],)
                 ).fetchone()
-                label = f"inbound #{change['inbound_id']} Naive endpoint"
+                label = f"inbound #{change['inbound_id']} endpoint"
+                if change["kind"] == "inbound_naive_endpoint":
+                    try:
+                        parsed = json.loads(str(row["settings"] or "{}")) if row else {}
+                    except json.JSONDecodeError:
+                        parsed = {}
+                    value = (
+                        str(parsed.get("domain") or ""),
+                        str(parsed.get("certFile") or ""),
+                        str(parsed.get("keyFile") or ""),
+                    ) if isinstance(parsed, dict) else None
+                    expected = (change["new_domain"], change["new_cert"], change["new_key"])
+                    if value != expected:
+                        raise RuntimeError(f"LucX publication synchronization verification failed for {label}")
+                    continue
                 try:
                     parsed = json.loads(str(row["settings"] or "{}")) if row else {}
                 except json.JSONDecodeError:
                     parsed = {}
-                value = (
-                    str(parsed.get("domain") or ""),
-                    str(parsed.get("certFile") or ""),
-                    str(parsed.get("keyFile") or ""),
-                ) if isinstance(parsed, dict) else None
-                expected = (change["new_domain"], change["new_cert"], change["new_key"])
-                if value != expected:
+                failed = False
+                for rewrite in change.get("rewrites", []):
+                    if rewrite.get("column") != "settings":
+                        continue
+                    document = parsed if isinstance(parsed, dict) else {}
+                    for field in rewrite.get("fields", []):
+                        current = _json_get(document, tuple(field["path"]))
+                        if current is MISSING or current != field["new"]:
+                            failed = True
+                if failed:
                     raise RuntimeError(f"LucX publication synchronization verification failed for {label}")
                 continue
             else:
@@ -590,6 +729,48 @@ def rollback_lucx_publication(
                     "UPDATE inbounds SET stream_settings = ? WHERE id = ?",
                     (str(change.get("old_value") or ""), inbound_id),
                 )
+            elif change.get("kind") == "inbound_endpoint":
+                inbound_id = int(change["inbound_id"])
+                row = connection.execute(
+                    "SELECT settings, stream_settings FROM inbounds WHERE id = ?", (inbound_id,)
+                ).fetchone()
+                if row is None:
+                    raise RuntimeError(f"inbound #{inbound_id} disappeared before rollback")
+                documents: dict[str, Any] = {}
+                for column in ("settings", "stream_settings"):
+                    raw = str(row[column] or "{}")
+                    try:
+                        documents[column] = json.loads(raw) if raw.strip() else {}
+                    except json.JSONDecodeError as exc:
+                        raise RuntimeError(
+                            f"inbound #{inbound_id} {column} is not valid JSON; rollback refused"
+                        ) from exc
+                refused = False
+                for rewrite in change.get("rewrites", []):
+                    column = str(rewrite.get("column") or "")
+                    document = documents.get(column)
+                    if not isinstance(document, dict):
+                        continue
+                    for field in rewrite.get("fields", []):
+                        path = tuple(field["path"])
+                        current = _json_get(document, path)
+                        if current is MISSING or current != field["new"]:
+                            refused = True
+                            continue
+                        if field.get("existed") and field.get("old"):
+                            _json_set(document, path, field["old"])
+                        else:
+                            _json_unset(document, path)
+                if refused:
+                    raise RuntimeError(
+                        f"refusing endpoint rollback because inbound #{inbound_id} "
+                        "changed after apply"
+                    )
+                for column, document in documents.items():
+                    connection.execute(
+                        f"UPDATE inbounds SET {column} = ? WHERE id = ?",
+                        (json.dumps(document, ensure_ascii=False), inbound_id),
+                    )
             elif change.get("kind") == "inbound_naive_endpoint":
                 inbound_id = int(change["inbound_id"])
                 row = connection.execute(

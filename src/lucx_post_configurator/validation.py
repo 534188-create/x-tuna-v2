@@ -863,4 +863,51 @@ def validate_live_configuration(
                     "LucX did not regenerate the Naive Caddyfile for the new zone "
                     f"(inbound #{protocol['inbound_id']}; {last_detail})"
                 )
+    # After a confirmed zone migration every synced TLS tunnel must actually
+    # accept the new SNI on its own backend port. TrustTunnel strictly rejects
+    # ClientHello whose SNI differs from its configured hostname, so a plain
+    # probe against the shared 443 is replaced by a direct backend probe here.
+    if fs is not None and runner is not None:
+        synced = [
+            protocol
+            for protocol in manifest.get("protocols", [])
+            if protocol.get("sync_naive_endpoint")
+            and str(protocol.get("security") or "").strip().lower() != "reality"
+            and int(protocol.get("public_port") or 443) == 443
+            and str(protocol.get("exposure") or "") == "tcp_sni"
+        ]
+        connect_host = "127.0.0.1"
+        for protocol in synced:
+            inbound_id = int(protocol["inbound_id"])
+            listener = None
+            for binding in protocol.get("port_bindings") or []:
+                if str(binding.get("protocol") or "").lower() == "tcp":
+                    listener = int(binding.get("port") or 0)
+                    break
+            if not listener:
+                continue
+            context = ssl.create_default_context()
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+            last_error: Exception | None = None
+            for _ in range(10):
+                try:
+                    with socket.create_connection(
+                        (connect_host, listener), timeout=6
+                    ) as raw_socket:
+                        with context.wrap_socket(
+                            raw_socket, server_hostname=protocol["domain"]
+                        ):
+                            pass
+                    last_error = None
+                    break
+                except (OSError, ValueError, ssl.SSLError) as exc:
+                    last_error = exc
+                    time.sleep(1)
+            if last_error is not None:
+                errors.append(
+                    f"TLS probe of inbound #{inbound_id} ({protocol.get('protocol')}) "
+                    f"on backend port {listener} failed for the new SNI "
+                    f"{protocol['domain']}: {last_error}"
+                )
     return errors

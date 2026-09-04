@@ -328,23 +328,32 @@ def build_plan(manifest: dict[str, Any], audit: Audit | None = None) -> dict[str
                 ],
             ),
         )
-    naive_endpoint_updates = [
+    endpoint_updates = [
         item
         for item in manifest.get("protocols", [])
-        if item.get("protocol") == "naive" and item.get("sync_naive_endpoint")
+        if item.get("sync_naive_endpoint")
+        and str(item.get("security") or "").strip().lower() != "reality"
     ]
-    if naive_endpoint_updates:
+    if endpoint_updates:
+        field_labels = {
+            "naive": "domain",
+            "trusttunnel": "hostname",
+            "anytls": "sni",
+        }
         actions.insert(
             1,
             Action(
                 "database",
-                "lucx-naive-endpoint",
-                "After backup, update the confirmed Naive inbound endpoint fields (domain, certFile, keyFile) so LucX regenerates its Caddyfile for the new zone",
+                "lucx-tls-endpoint",
+                "After backup, update the confirmed TLS inbound endpoint fields (hostname-like field, certFile, keyFile or stream TLS settings) so LucX regenerates tunnel configs for the new zone",
                 [manifest["lucx"]["db_path"]],
                 services=["x-ui.service"],
                 database_fields=[
-                    f"inbounds[#{int(item['inbound_id'])}].settings.domain/certFile/keyFile"
-                    for item in naive_endpoint_updates
+                    (
+                        f"inbounds[#{int(item['inbound_id'])}] ({item.get('protocol')})."
+                        f"{field_labels.get(str(item.get('protocol')), 'TLS endpoint fields')} + certificate paths"
+                    )
+                    for item in endpoint_updates
                 ],
             ),
         )

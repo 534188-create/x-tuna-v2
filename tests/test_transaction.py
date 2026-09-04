@@ -533,10 +533,11 @@ class TransactionTests(unittest.TestCase):
                 "/etc/x-ui/x-ui.db",
                 panel_domain=None,
                 subscription_domain=None,
-                naive_endpoint_updates=[
+                endpoint_updates=[
                     {
                         "inbound_id": 1,
                         "domain": "naive.new-zone.example",
+                        "old_domain": "old.example.com",
                         "cert_path": "/etc/letsencrypt/live/new-zone.example/fullchain.pem",
                         "key_path": "/etc/letsencrypt/live/new-zone.example/privkey.pem",
                     }
@@ -544,13 +545,19 @@ class TransactionTests(unittest.TestCase):
             )
             self.assertEqual(len(changes), 1)
             change = changes[0]
-            self.assertEqual(change["kind"], "inbound_naive_endpoint")
-            self.assertEqual(change["old_domain"], "old.example.com")
-            self.assertEqual(change["new_domain"], "naive.new-zone.example")
-            self.assertEqual(change["old_cert"], "/old/fullchain.pem")
-            self.assertEqual(change["new_cert"], "/etc/letsencrypt/live/new-zone.example/fullchain.pem")
-            self.assertEqual(change["old_key"], "/old/privkey.pem")
-            self.assertEqual(change["new_key"], "/etc/letsencrypt/live/new-zone.example/privkey.pem")
+            self.assertEqual(change["kind"], "inbound_endpoint")
+            self.assertEqual(change["protocol"], "naive")
+            fields = {
+                tuple(item["path"]): item
+                for rewrite in change["rewrites"] if rewrite["column"] == "settings"
+                for item in rewrite["fields"]
+            }
+            self.assertEqual(fields[("domain",)]["old"], "old.example.com")
+            self.assertEqual(fields[("domain",)]["new"], "naive.new-zone.example")
+            self.assertEqual(fields[("certFile",)]["old"], "/old/fullchain.pem")
+            self.assertEqual(fields[("certFile",)]["new"], "/etc/letsencrypt/live/new-zone.example/fullchain.pem")
+            self.assertEqual(fields[("keyFile",)]["old"], "/old/privkey.pem")
+            self.assertEqual(fields[("keyFile",)]["new"], "/etc/letsencrypt/live/new-zone.example/privkey.pem")
 
             connection = __import__("sqlite3").connect(database)
             raw = connection.execute("SELECT settings FROM inbounds WHERE id = 1").fetchone()[0]
@@ -585,10 +592,11 @@ class TransactionTests(unittest.TestCase):
                     "/etc/x-ui/x-ui.db",
                     panel_domain=None,
                     subscription_domain=None,
-                    naive_endpoint_updates=[
+                    endpoint_updates=[
                         {
-                            "inbound_id": 1,
+                            "inbound_id": 999,
                             "domain": "naive.new-zone.example",
+                            "old_domain": "old.example.com",
                             "cert_path": "/cert/fullchain.pem",
                             "key_path": "/cert/privkey.pem",
                         }
@@ -621,16 +629,165 @@ class TransactionTests(unittest.TestCase):
                 "/etc/x-ui/x-ui.db",
                 panel_domain=None,
                 subscription_domain=None,
-                naive_endpoint_updates=[
+                endpoint_updates=[
                     {
                         "inbound_id": 1,
                         "domain": "naive.new-zone.example",
+                        "old_domain": "old.example.com",
                         "cert_path": "/cert/fullchain.pem",
                         "key_path": "/cert/privkey.pem",
                     }
                 ],
             )
             self.assertEqual(changes, [])
+
+    def test_endpoint_sync_updates_trusttunnel_anytls_and_xray_tls(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            database = make_target(root)
+            fs = TargetFS(root)
+            connection = __import__("sqlite3").connect(database)
+            connection.execute(
+                "UPDATE inbounds SET protocol = 'trusttunnel', settings = ?, share_addr = ? WHERE id = 1",
+                (
+                    json.dumps(
+                        {
+                            "hostname": "old.example.com",
+                            "certFile": "/old/fullchain.pem",
+                            "keyFile": "/old/privkey.pem",
+                            "clientRandomPrefix": "2e08e767/ffffffff",
+                            "clients": [{"password": "secret"}],
+                        }
+                    ),
+                    "old.example.com",
+                ),
+            )
+            connection.execute(
+                "UPDATE inbounds SET protocol = 'anytls', settings = ? WHERE id = 2",
+                (
+                    json.dumps(
+                        {
+                            "sni": "old.example.com",
+                            "certFile": "/old/fullchain.pem",
+                            "keyFile": "/old/privkey.pem",
+                        }
+                    ),
+                ),
+            )
+            connection.execute(
+                "UPDATE inbounds SET protocol = 'trojan', stream_settings = ? WHERE id = 3",
+                (
+                    json.dumps(
+                        {
+                            "security": "tls",
+                            "tlsSettings": {
+                                "serverName": "old.example.com",
+                                "certificates": [
+                                    {
+                                        "certificateFile": "/old/fullchain.pem",
+                                        "keyFile": "/old/privkey.pem",
+                                    }
+                                ],
+                            },
+                        }
+                    ),
+                ),
+            )
+            connection.execute(
+                "UPDATE inbounds SET protocol = 'vless', stream_settings = ? WHERE id = 4",
+                (
+                    json.dumps(
+                        {
+                            "security": "reality",
+                            "realitySettings": {"serverNames": ["www.nvidia.com"]},
+                        }
+                    ),
+                ),
+            )
+            connection.commit()
+            connection.close()
+
+            changes = synchronize_lucx_publication(
+                fs,
+                "/etc/x-ui/x-ui.db",
+                panel_domain=None,
+                subscription_domain=None,
+                endpoint_updates=[
+                    {
+                        "inbound_id": 1,
+                        "domain": "new.example.com",
+                        "old_domain": "old.example.com",
+                        "cert_path": "/new/fullchain.pem",
+                        "key_path": "/new/privkey.pem",
+                    },
+                    {
+                        "inbound_id": 2,
+                        "domain": "new.example.com",
+                        "old_domain": "old.example.com",
+                        "cert_path": "/new/fullchain.pem",
+                        "key_path": "/new/privkey.pem",
+                    },
+                    {
+                        "inbound_id": 3,
+                        "domain": "new.example.com",
+                        "old_domain": "old.example.com",
+                        "cert_path": "/new/fullchain.pem",
+                        "key_path": "/new/privkey.pem",
+                    },
+                    {
+                        # Reality inbound: must be ignored entirely.
+                        "inbound_id": 4,
+                        "domain": "new.example.com",
+                        "old_domain": "old.example.com",
+                        "cert_path": "/new/fullchain.pem",
+                        "key_path": "/new/privkey.pem",
+                    },
+                ],
+            )
+            kinds = sorted(change["inbound_id"] for change in changes)
+            self.assertEqual(kinds, [1, 2, 3])
+            connection = __import__("sqlite3").connect(database)
+            rows = {
+                row[0]: (row[1], row[2])
+                for row in connection.execute(
+                    "SELECT id, settings, stream_settings FROM inbounds ORDER BY id"
+                )
+            }
+            connection.close()
+            tt = json.loads(rows[1][0])
+            self.assertEqual(tt["hostname"], "new.example.com")
+            self.assertEqual(tt["certFile"], "/new/fullchain.pem")
+            self.assertEqual(tt["keyFile"], "/new/privkey.pem")
+            self.assertEqual(tt["clientRandomPrefix"], "2e08e767/ffffffff")
+            self.assertEqual(tt["clients"], [{"password": "secret"}])
+            anytls = json.loads(rows[2][0])
+            self.assertEqual(anytls["sni"], "new.example.com")
+            trojan = json.loads(rows[3][1])
+            self.assertEqual(trojan["tlsSettings"]["serverName"], "new.example.com")
+            self.assertEqual(
+                trojan["tlsSettings"]["certificates"][0]["certificateFile"], "/new/fullchain.pem"
+            )
+            self.assertEqual(trojan["tlsSettings"]["certificates"][0]["keyFile"], "/new/privkey.pem")
+            reality = json.loads(rows[4][1])
+            self.assertEqual(reality["realitySettings"]["serverNames"], ["www.nvidia.com"])
+
+            rollback_lucx_publication(fs, "/etc/x-ui/x-ui.db", changes)
+            connection = __import__("sqlite3").connect(database)
+            rows = {
+                row[0]: (row[1], row[2])
+                for row in connection.execute(
+                    "SELECT id, settings, stream_settings FROM inbounds ORDER BY id"
+                )
+            }
+            connection.close()
+            self.assertEqual(json.loads(rows[1][0])["hostname"], "old.example.com")
+            self.assertEqual(json.loads(rows[1][0])["certFile"], "/old/fullchain.pem")
+            self.assertEqual(json.loads(rows[2][0])["sni"], "old.example.com")
+            trojan = json.loads(rows[3][1])
+            self.assertEqual(trojan["tlsSettings"]["serverName"], "old.example.com")
+            self.assertEqual(
+                trojan["tlsSettings"]["certificates"][0]["certificateFile"], "/old/fullchain.pem"
+            )
 
 
 if __name__ == "__main__":

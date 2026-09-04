@@ -374,34 +374,47 @@ def _reconfigure(
             output_fn,
             lambda: certificate_status_for_manifest(engine, manifest),
         )
-        has_naive = any(
-            item.get("protocol") == "naive" and item.get("exposure") == "tcp_sni"
+        tls_candidates = [
+            item
             for item in manifest.get("protocols", [])
-        )
+            if str(item.get("security") or "").strip().lower() != "reality"
+        ]
         sync_naive_endpoint = False
-        if has_naive:
+        if tls_candidates:
+            field_labels = {
+                "naive": "domain",
+                "trusttunnel": "hostname",
+                "anytls": "sni",
+            }
+            affected = ", ".join(
+                f"#{item.get('inbound_id')} {item.get('protocol')} "
+                f"({field_labels.get(str(item.get('protocol')), 'TLS SNI')})"
+                for item in tls_candidates
+            )
             output_fn(
-                "Обнаружен Naive. Его Caddyfile генерируется LucX из настроек inbound; "
-                "этот инструмент никогда не редактирует файл напрямую."
+                "Найдены TLS-протоколы, чьи настройки LucX содержат старый домен "
+                "и пути сертификата: " + affected + "."
+            )
+            output_fn(
+                "LucX перегенерирует свои tunnel-конфигурации сам; этот инструмент "
+                "никогда не редактирует их файлы напрямую."
             )
             sync_naive_endpoint = _yes_no(
-                "Синхронизировать Naive с новой зоной (домен и пути сертификата в настройках LucX)?",
+                "Синхронизировать TLS-протоколы с новой зоной (домен/SNI и пути сертификата в настройках LucX)?",
                 input_fn,
                 output_fn,
             )
             if not sync_naive_endpoint:
                 output_fn(
-                    "Отменено: без синхронизации Naive продолжит отдавать старый домен и сертификат. "
-                    "Обновите Naive вручную в панели LucX и повторите смену зоны."
+                    "Отменено: без синхронизации протоколы продолжат отдавать старый "
+                    "домен и сертификат, а TrustTunnel отклонит новый SNI. Обновите "
+                    "настройки вручную в панели LucX и повторите смену зоны."
                 )
                 return
             # The engine reads the flag per protocol; mirror the user's answer
-            # onto every planned Naive inbound published through shared SNI.
+            # onto every planned TLS inbound (Reality is never touched).
             for protocol in manifest.get("protocols", []):
-                if (
-                    protocol.get("protocol") == "naive"
-                    and protocol.get("exposure") == "tcp_sni"
-                ):
+                if str(protocol.get("security") or "").strip().lower() != "reality":
                     protocol["sync_naive_endpoint"] = True
         if not status.get("selected"):
             output_fn(
@@ -442,6 +455,23 @@ def _reconfigure(
         manifest["certificates"]["cert_path"] = selected["cert_path"]
         manifest["certificates"]["key_path"] = selected["key_path"]
         manifest["components"]["tls_hook"] = True
+        # Mirror the renewal metadata that issuance would have recorded: the
+        # banner reads these flags, and a pre-existing certificate selected
+        # during a zone migration must not look like "renewal not configured".
+        renewal = manifest["certificates"].setdefault("renewal", {})
+        if str(selected.get("source") or "").lower() == "certbot" or str(
+            selected.get("cert_path") or ""
+        ).startswith("/etc/letsencrypt/live/"):
+            renewal["enabled"] = True
+            renewal["provider"] = "certbot"
+        elif "/.acme.sh/" in str(selected.get("cert_path") or ""):
+            renewal["enabled"] = True
+            renewal["provider"] = "acme.sh"
+        primary_domain = str(
+            selected.get("renewal_name") or ""
+        ) or manifest["certificates"]["renewal"].get("primary_domain")
+        if primary_domain:
+            renewal["primary_domain"] = primary_domain
         manifest.setdefault("lucx", {}).setdefault("settings_management", {}).update(
             {
                 "sync_certificate_paths": True,

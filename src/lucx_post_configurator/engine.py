@@ -812,17 +812,32 @@ class Engine:
                     for protocol in manifest.get("protocols", [])
                     if protocol.get("sync_public_endpoint")
                 ]
-                naive_endpoint_updates = [
-                    {
-                        "inbound_id": protocol["inbound_id"],
-                        "domain": protocol["domain"],
-                        "cert_path": manifest["certificates"]["cert_path"],
-                        "key_path": manifest["certificates"]["key_path"],
-                    }
-                    for protocol in manifest.get("protocols", [])
-                    if protocol.get("protocol") == "naive"
-                    and protocol.get("sync_naive_endpoint")
-                ]
+                endpoint_updates: list[dict[str, str]] = []
+                audit_inbounds = {
+                    int(inbound.id): inbound
+                    for inbound in getattr(audit, "inbounds", []) or []
+                }
+                for protocol in manifest.get("protocols", []):
+                    if not protocol.get("sync_naive_endpoint"):
+                        continue
+                    if str(protocol.get("security") or "").strip().lower() == "reality":
+                        continue
+                    inbound = audit_inbounds.get(int(protocol["inbound_id"]))
+                    if inbound is None:
+                        continue
+                    endpoint_updates.append(
+                        {
+                            "inbound_id": protocol["inbound_id"],
+                            "domain": protocol["domain"],
+                            # share_addr already stores the bare host after
+                            # discovery normalization; keep the last segment
+                            # after '@' for defensive compatibility.
+                            "old_domain": str(inbound.share_addr or "")
+                            .rsplit("@", 1)[-1]
+                            .strip()
+                            .lower(),
+                        }
+                    )
                 database_changes.extend(synchronize_lucx_publication(
                     self.fs,
                     manifest["lucx"]["db_path"],
@@ -847,7 +862,7 @@ class Engine:
                         else None
                     ),
                     public_publications=public_publications,
-                    naive_endpoint_updates=naive_endpoint_updates,
+                    endpoint_updates=endpoint_updates,
                     certificate_paths=(
                         {
                             "cert_path": manifest["certificates"]["cert_path"],

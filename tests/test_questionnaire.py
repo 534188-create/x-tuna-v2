@@ -84,6 +84,89 @@ class RefreshInboundSetPolicyTests(unittest.TestCase):
             refresh_manifest_from_audit(manifest, audit)
 
 
+class RenewalNormalizationTests(unittest.TestCase):
+    """A pre-existing certificate must still show renewal as configured."""
+
+    def _manifest(self) -> dict:
+        audit = _audit("vless")
+        manifest = default_manifest(audit)
+        return manifest
+
+    def test_refresh_confirms_certbot_renewal_from_certificate_path(self) -> None:
+        audit = _audit("vless")
+        manifest = default_manifest(audit)
+        manifest["protocols"] = [
+            {
+                "inbound_id": 1,
+                "protocol": "vless",
+                "domain": "vless.example.com",
+                "internal_port": 443,
+                "public_port": 443,
+            }
+        ]
+        manifest["certificates"]["cert_path"] = "/etc/letsencrypt/live/example.com/fullchain.pem"
+        manifest["certificates"]["key_path"] = "/etc/letsencrypt/live/example.com/privkey.pem"
+        manifest["certificates"]["renewal"] = {
+            "enabled": False,
+            "provider": "auto",
+            "primary_domain": "",
+        }
+
+        refreshed, warnings = refresh_manifest_from_audit(manifest, audit)
+
+        renewal = refreshed["certificates"]["renewal"]
+        self.assertTrue(renewal["enabled"])
+        self.assertEqual(renewal["provider"], "certbot")
+        self.assertEqual(renewal["primary_domain"], "example.com")
+        self.assertTrue(any("Автопродление" in warning for warning in warnings))
+
+    def test_refresh_confirms_acme_sh_renewal_from_certificate_path(self) -> None:
+        audit = _audit("vless")
+        manifest = default_manifest(audit)
+        manifest["protocols"] = [
+            {
+                "inbound_id": 1,
+                "protocol": "vless",
+                "domain": "vless.example.com",
+                "internal_port": 443,
+                "public_port": 443,
+            }
+        ]
+        manifest["certificates"]["cert_path"] = (
+            "/root/.acme.sh/example.com_ecc/fullchain.pem"
+        )
+        manifest["certificates"]["renewal"] = {
+            "enabled": False,
+            "provider": "auto",
+            "primary_domain": "",
+        }
+
+        refreshed, _warnings = refresh_manifest_from_audit(manifest, audit)
+
+        renewal = refreshed["certificates"]["renewal"]
+        self.assertTrue(renewal["enabled"])
+        self.assertEqual(renewal["provider"], "acme.sh")
+        self.assertEqual(renewal["primary_domain"], "example.com")
+
+    def test_refresh_keeps_unknown_certificate_renewal_off(self) -> None:
+        audit = _audit("vless")
+        manifest = default_manifest(audit)
+        manifest["protocols"] = [
+            {
+                "inbound_id": 1,
+                "protocol": "vless",
+                "domain": "vless.example.com",
+                "internal_port": 443,
+                "public_port": 443,
+            }
+        ]
+        manifest["certificates"]["cert_path"] = "/root/cert/example.com/fullchain.pem"
+
+        refreshed, _warnings = refresh_manifest_from_audit(manifest, audit)
+
+        self.assertFalse(refreshed["certificates"]["renewal"]["enabled"])
+
+
 class NumberedDomainSelectionTests(unittest.TestCase):
     def test_selects_sni_by_number_and_offers_select_all(self) -> None:
         output: list[str] = []
